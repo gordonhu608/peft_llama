@@ -688,6 +688,7 @@ class LlamaModel(LlamaPreTrainedModel):
                 image_features = self.llama_proj(image_features.last_hidden_state)
                 
             dummy_image_features = torch.zeros(32, 768, device=inputs_embeds.device, dtype=inputs_embeds.dtype) #originally 256, 1024
+            print("device checking", inputs_embeds.device)
             dummy_image_features = self.llama_proj(dummy_image_features) #[1,32, 4096]
 
             new_input_embeds = []

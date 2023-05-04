@@ -374,7 +374,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 
 
 def train():
-    device = torch.device("cuda:0")
+    device = torch.device("cpu") #("cuda:0")
     
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
@@ -437,7 +437,7 @@ def train():
         
         vision_tower.to(dtype=dtype, device=device)
         model.model.visual_encoder = vision_tower    
-        print("\n we loaded the weights of the pretrained vision encoder")
+        print("\n loading the weights of the pretrained vision encoder")
             
         image_processor = CLIPImageProcessor.from_pretrained(model_args.vision_tower)
 
@@ -457,7 +457,7 @@ def train():
         msg = model.model.Qformer.load_state_dict(q_former_state_dict, strict=False)
         #logger.info("Missing keys {}".format(msg.missing_keys))
         logging.info("load checkpoint Qformer from %s" % q_former_model)
-        print("\n loaded trainable pretrained Qformer weights")
+        print("\nLoaded trainable pretrained Qformer weights")
 
         # model.config.use_mm_proj = True
         # model.config.mm_hidden_size = vision_config.hidden_size
@@ -472,7 +472,7 @@ def train():
             mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
 
         model.model.llama_proj = mm_projector
-        print("\nloaded pretrained mm_projector")
+        print("\nLoaded pretrained mm_projector")
         # model.config.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
         # if model_args.tune_mm_mlp_adapter:
         #     model.requires_grad_(False)
@@ -577,4 +577,5 @@ def train():
     model.save_pretrained('save_pretrained/may03')
 
 if __name__ == "__main__":
+    print("This is from peft_llama script")
     train()
