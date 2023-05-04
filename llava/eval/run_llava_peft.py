@@ -5,8 +5,8 @@ import os
 from llava.conversation import conv_templates
 from llava.utils import disable_torch_init
 from transformers import CLIPVisionModel, CLIPImageProcessor, StoppingCriteria
-import llava.model.blip_llama as blip_llama
-from llava.model.blip2 import Blip2Base
+import llava.model.blip_llama_infer as blip_llama
+from llava.model.blip2_infer import Blip2Base
 
 from PIL import Image
 
@@ -80,17 +80,21 @@ def eval_model(args):
 
     #model.model.load_state_dict(torch.load(lora_weight, map_location='cpu'))
 
-    visual_encoder, _ =  Blip2Base.init_vision_encoder(
-            model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp32"
+    vision_tower, _ =  Blip2Base.init_vision_encoder(
+            model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16"
         )
+    
+        #  self.visual_encoder, self.ln_vision = Blip2Base.init_vision_encoder(
+        #     model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16"
+        # )
     #CLIPVisionModel.from_pretrained(args.vision_tower, torch_dtype=torch.float16).cuda()
     image_processor = CLIPImageProcessor.from_pretrained(args.vision_tower, torch_dtype=torch.float16)
 
-    mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
+    mm_use_im_start_end =  False #getattr(model.config, "mm_use_im_start_end", False)
     tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
     #todo add pad token if for batched inference 
     
-    model.model.visual_encoder = visual_encoder
+    model.model.visual_encoder = vision_tower
     if mm_use_im_start_end:
         tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
 
@@ -98,6 +102,7 @@ def eval_model(args):
     vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
     vision_config.use_im_start_end = mm_use_im_start_end
     if mm_use_im_start_end:
+        print("\n not supported yet \n")
         vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
 
     image_token_len = 32  #(vision_config.image_size // vision_config.patch_size) ** 2
@@ -123,25 +128,25 @@ def eval_model(args):
 
     image = load_image(args.image_file)
     image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-
-    input_ids = torch.as_tensor(inputs.input_ids).cuda()
+    input_ids = torch.as_tensor(inputs.input_ids).cuda() # , dtype=torch.float16).cuda()  ## added dtype
 
     keywords = ['###']
     stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
+    model.to('cpu') # lora weight is on cpu
     model = PeftModel.from_pretrained(
             model,
             lora_weight,
             torch_dtype=torch.float16,
         )
+    model.to('cuda')
     model.eval()
     if torch.__version__ >= "2":
         model = torch.compile(model)
 
-    
     with torch.inference_mode():
         output_ids = model.generate(
-            input_ids,
+            input_ids=input_ids,
             images=image_tensor.unsqueeze(0).half().cuda(),
             do_sample=True,
             temperature=0.7,
@@ -178,7 +183,7 @@ if __name__ == "__main__":
     parser.add_argument("--image-file", type=str, required=True)
     parser.add_argument("--query", type=str, required=True)
     parser.add_argument("--mm-projector", type=str, default=None)
-    parser.add_argument("--vision-tower", type=str, default=None)
+    parser.add_argument("--vision-tower", type=str, default='openai/clip-vit-large-patch14')
     parser.add_argument("--conv-mode", type=str, default="multimodal")
     parser.add_argument("--num-chunks", type=int, default=1)
     parser.add_argument("--chunk-idx", type=int, default=0)

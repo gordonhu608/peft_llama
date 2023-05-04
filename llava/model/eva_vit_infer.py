@@ -121,6 +121,9 @@ class Attention(nn.Module):
         if self.q_bias is not None:
             qkv_bias = torch.cat((self.q_bias, torch.zeros_like(self.v_bias, requires_grad=False), self.v_bias))
         # qkv = self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        # print("x.type",x.dtype)
+        # print("self.qkv.weight.type",self.qkv.weight.dtype)
+        # print("qkv_bias.type",qkv_bias.dtype)
         qkv = F.linear(input=x, weight=self.qkv.weight, bias=qkv_bias)
         qkv = qkv.reshape(B, N, 3, self.num_heads, -1).permute(2, 0, 3, 1, 4)
         q, k, v = qkv[0], qkv[1], qkv[2]   # make torchscript happy (cannot use tensor as tuple)
@@ -286,8 +289,12 @@ class VisionTransformer(nn.Module):
 #         self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
         if self.pos_embed is not None:
-            trunc_normal_(self.pos_embed.to(torch.float32), std=.02).to(self.pos_embed.dtype)   #fix why to float32 
-        trunc_normal_(self.cls_token.to(torch.float32), std=.02).to(self.cls_token.dtype) #fix why to float32
+            trunc_normal_(self.pos_embed.to(torch.float32), std=.02).to(dtype=torch.float16)   #.to(self.pos_embed.dtype)   #fix why to float32 
+            #print("self.pos_embed",self.pos_embed.dtype)
+            #self.pos_embed = nn.Parameter(self.pos_embed.to(torch.float16))
+        trunc_normal_(self.cls_token.to(torch.float32), std=.02).to(dtype=torch.float16)      #to(self.cls_token.dtype) #fix why to float32
+        #self.cls_token = nn.Parameter(self.cls_token.to(torch.float16))
+        #print("self.cls_token",self.cls_token.dtype)
         # trunc_normal_(self.mask_token, std=.02)
 #         if isinstance(self.head, nn.Linear):
 #             trunc_normal_(self.head.weight, std=.02)
@@ -307,7 +314,7 @@ class VisionTransformer(nn.Module):
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight.to(torch.float32), std=.02).to(m.weight.dtype) #fix why to float32
+            trunc_normal_(m.weight.to(torch.float32), std=.02).to(m.weight.dtype) #fix why to float32  then back fp16 
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):
@@ -403,11 +410,11 @@ def convert_weights_to_fp16(model: nn.Module):
             if l.bias is not None:
                 l.bias.data = l.bias.data.half()
 
-#         if isinstance(l, (nn.MultiheadAttention, Attention)):
-#             for attr in [*[f"{s}_proj_weight" for s in ["in", "q", "k", "v"]], "in_proj_bias", "bias_k", "bias_v"]:
-#                 tensor = getattr(l, attr)
-#                 if tensor is not None:
-#                     tensor.data = tensor.data.half()
+        # if isinstance(l, (nn.MultiheadAttention, Attention)):
+        #     for attr in [*[f"{s}_proj_weight" for s in ["in", "q", "k", "v"]], "in_proj_bias", "bias_k", "bias_v"]:
+        #         tensor = getattr(l, attr)
+        #         if tensor is not None:
+        #             tensor.data = tensor.data.half()
 
     model.apply(_convert_weights_to_fp16)
     
@@ -448,8 +455,8 @@ def create_eva_vit_g(img_size=224,drop_path_rate=0.4,use_checkpoint=False,precis
     model.config = config
 
     if precision == "fp16":
-#         model.to("cuda") 
-        convert_weights_to_fp16(model)
+        model.half().to("cuda") 
+        #convert_weights_to_fp16(model)
     return model
 
 # if __name__ == "__main__":

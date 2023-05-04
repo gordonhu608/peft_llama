@@ -374,7 +374,8 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 
 
 def train():
-    device = torch.device("cpu") #("cuda:0")
+    #todo need to change for multi gpu 
+    device = torch.device("cuda") #("cpu") #("cuda:0")
     
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))

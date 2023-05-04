@@ -32,7 +32,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from transformers.models.llama.configuration_llama import LlamaConfig
 
-from llava.model.blip2 import Blip2Base, disabled_train
+from llava.model.blip2_infer import Blip2Base, disabled_train
 from .dist_utils import download_cached_file
 
 logger = logging.get_logger(__name__)
@@ -673,6 +673,8 @@ class LlamaModel(LlamaPreTrainedModel):
                         )
                         image_features.append(image_feature)
                 else:
+                    # print("images", images.shape)
+                    # print("images.dtype", images.dtype)
                     image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) #.unsqueeze(0)
                     query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
                     image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
@@ -688,7 +690,7 @@ class LlamaModel(LlamaPreTrainedModel):
                 image_features = self.llama_proj(image_features.last_hidden_state)
                 
             dummy_image_features = torch.zeros(32, 768, device=inputs_embeds.device, dtype=inputs_embeds.dtype) #originally 256, 1024
-            print("device checking", inputs_embeds.device)
+            #print("device checking", inputs_embeds.device)
             dummy_image_features = self.llama_proj(dummy_image_features) #[1,32, 4096]
 
             new_input_embeds = []
