@@ -383,7 +383,7 @@ def train():
         device_map = {"": int(os.environ.get("LOCAL_RANK") or 0)}
         #gradient_accumulation_steps = gradient_accumulation_steps // world_size
     
-    device = torch.device("cuda") #("cpu") #("cuda:0")
+    #device = torch.device("cuda") #("cpu") #("cuda:0")
     
     parser = transformers.HfArgumentParser(
         (ModelArguments, DataArguments, TrainingArguments))
@@ -445,7 +445,7 @@ def train():
         print("freeze vision encoder") # logging 
         vision_tower.requires_grad_(False)
         
-        vision_tower.to(dtype=dtype, device=next(model.model.visual_encoder.parameters()).device) 
+        vision_tower.to(dtype=dtype) #, device=model.model.visual_encoder.device)
         model.model.visual_encoder = vision_tower    
         print("\nLoading the pretrained vision encoder")
             
@@ -512,7 +512,7 @@ def train():
                 output_embeddings[-num_new_tokens:] = output_embeddings_avg
 
             if model_args.tune_mm_mlp_adapter:
-                model.model.orig_embeds_params = [model.get_input_embeddings().weight.data.clone().to(device=next(model.model.llama_proj.parameters()).device)] # training_args.device
+                model.model.orig_embeds_params = [model.get_input_embeddings().weight.data.clone().to(device=model.model.llama_proj.device)] # training_args.device
                 for p in model.get_input_embeddings().parameters():
                     p.requires_grad = True
                 for p in model.get_output_embeddings().parameters():
