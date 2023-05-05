@@ -7,7 +7,7 @@ from llava.utils import disable_torch_init
 from transformers import CLIPVisionModel, CLIPImageProcessor, StoppingCriteria
 import llava.model.blip_llama_infer as blip_llama
 from llava.model.blip2_infer import Blip2Base
-
+from llava.model.dist_utils import download_cached_file
 from PIL import Image
 
 import os
@@ -114,6 +114,15 @@ def eval_model(args):
 
     # model.model.mm_projector = mm_projector.cuda().half()
     # model.model.vision_tower = [vision_tower]
+    
+    q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
+    cached_file = download_cached_file(
+            q_former_model, check_hash=False, progress=True
+        )
+    q_former_checkpoint = torch.load(cached_file, map_location="cpu")
+    q_former_state_dict = q_former_checkpoint["model"]
+    msg = model.model.Qformer.load_state_dict(q_former_state_dict, strict=False)
+    print("\nLoaded trainable pretrained Qformer weights")
 
     qs = args.query
     if mm_use_im_start_end:
