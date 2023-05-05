@@ -374,7 +374,7 @@ def make_supervised_data_module(tokenizer: transformers.PreTrainedTokenizer,
 
 
 def train():
-    #todo need to change for multi gpu 
+    #todo may need to consider not loading to cpu first if using multiple gpus 
     
     device_map = "auto"
     world_size = int(os.environ.get("WORLD_SIZE", 1))

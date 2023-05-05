@@ -13,8 +13,8 @@ import os
 #from llava.train.peft_train import train
 #from llava.train.peft_train_llama_modeling import train  # so sad I deleted this file  :(
 
-#from llava.train.peft_train_llama_accelerate import train
-from llava.train.peft_train_llama import train
+from llava.train.peft_train_llama_accelerate import train
+#from llava.train.peft_train_llama import train
 
 if __name__ == "__main__":
     train()
