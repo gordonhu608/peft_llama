@@ -5,6 +5,9 @@ import os
 from llava.conversation import conv_templates
 from llava.utils import disable_torch_init
 from transformers import CLIPVisionModel, CLIPImageProcessor, StoppingCriteria
+import llava.model.blip_llama_infer as blip_llama
+from llava.model.blip2_infer import Blip2Base
+from llava.model.dist_utils import download_cached_file
 
 from PIL import Image
 
@@ -53,49 +56,54 @@ def eval_model(args):
     disable_torch_init()
     model_name = os.path.expanduser(args.model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
-    if args.mm_projector is None:
-        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
-        image_processor = CLIPImageProcessor.from_pretrained(model.config.mm_vision_tower, torch_dtype=torch.float16)
+  
+    model = blip_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
 
-        mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
-        tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
-        if mm_use_im_start_end:
-            tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+    #model.model.load_state_dict(torch.load(lora_weight, map_location='cpu'))
 
-        vision_tower = model.model.vision_tower[0]
-        vision_tower.to(device='cuda', dtype=torch.float16)
-        vision_config = vision_tower.config
-        vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
-        vision_config.use_im_start_end = mm_use_im_start_end
-        if mm_use_im_start_end:
-            vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
-        image_token_len = (vision_config.image_size // vision_config.patch_size) ** 2
-    else:
-        # in case of using a pretrained model with only a MLP projector weights
-        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
+    vision_tower, _ =  Blip2Base.init_vision_encoder(
+            model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16"
+        )
+    
+        #  self.visual_encoder, self.ln_vision = Blip2Base.init_vision_encoder(
+        #     model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16"
+        # )
+    #CLIPVisionModel.from_pretrained(args.vision_tower, torch_dtype=torch.float16).cuda()
+    image_processor = CLIPImageProcessor.from_pretrained(args.vision_tower, torch_dtype=torch.float16)
 
-        vision_tower = CLIPVisionModel.from_pretrained(args.vision_tower, torch_dtype=torch.float16).cuda()
-        image_processor = CLIPImageProcessor.from_pretrained(args.vision_tower, torch_dtype=torch.float16)
+    mm_use_im_start_end =  False #getattr(model.config, "mm_use_im_start_end", False)
+    tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
+    #todo add pad token if for batched inference 
+    
+    model.model.visual_encoder = vision_tower
+    if mm_use_im_start_end:
+        tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
 
-        mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
-        tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
-        if mm_use_im_start_end:
-            tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+    vision_config = vision_tower.config
+    vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
+    vision_config.use_im_start_end = mm_use_im_start_end
+    if mm_use_im_start_end:
+        print("\n not supported yet \n")
+        vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
 
-        vision_config = vision_tower.config
-        vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
-        vision_config.use_im_start_end = mm_use_im_start_end
-        if mm_use_im_start_end:
-            vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
+    image_token_len = 32  #(vision_config.image_size // vision_config.patch_size) ** 2
+    
+    model.model.visual_encoder.config = vision_config
+    # mm_projector = torch.nn.Linear(vision_config.hidden_size, model.config.hidden_size)
+    # mm_projector_weights = torch.load(args.mm_projector, map_location='cpu')
+    # mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items()})
 
-        image_token_len = (vision_config.image_size // vision_config.patch_size) ** 2
-
-        mm_projector = torch.nn.Linear(vision_config.hidden_size, model.config.hidden_size)
-        mm_projector_weights = torch.load(args.mm_projector, map_location='cpu')
-        mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items()})
-
-        model.model.mm_projector = mm_projector.cuda().half()
-        model.model.vision_tower = [vision_tower]
+    # model.model.mm_projector = mm_projector.cuda().half()
+    # model.model.vision_tower = [vision_tower]
+    
+    q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
+    cached_file = download_cached_file(
+            q_former_model, check_hash=False, progress=True
+        )
+    q_former_checkpoint = torch.load(cached_file, map_location="cpu")
+    q_former_state_dict = q_former_checkpoint["model"]
+    msg = model.model.Qformer.load_state_dict(q_former_state_dict, strict=False)
+    print("\nLoaded trainable pretrained Qformer weights")
 
     qs = args.query
     if mm_use_im_start_end:
@@ -110,8 +118,7 @@ def eval_model(args):
 
     image = load_image(args.image_file)
     image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-
-    input_ids = torch.as_tensor(inputs.input_ids).cuda()
+    input_ids = torch.as_tensor(inputs.input_ids).cuda() # , dtype=torch.float16).cuda()  ## added dtype
 
     keywords = ['###']
     stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
