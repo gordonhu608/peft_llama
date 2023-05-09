@@ -123,7 +123,14 @@ def eval_model(args):
     q_former_state_dict = q_former_checkpoint["model"]
     msg = model.model.Qformer.load_state_dict(q_former_state_dict, strict=False)
     print("\nLoaded trainable pretrained Qformer weights")
+    
+    # mm_projector = model.model.llama_proj
+    # mm_projector_weights = torch.load("data/minigpt_proj_7b.pth", map_location='cpu')['model']
+    # mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
 
+    # model.model.llama_proj = mm_projector
+    # print("\nLoaded pretrained mm_projector")
+    
     qs = args.query
     if mm_use_im_start_end:
         qs = qs + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len + DEFAULT_IM_END_TOKEN
@@ -153,6 +160,10 @@ def eval_model(args):
     if torch.__version__ >= "2":
         model = torch.compile(model)
 
+    print("input_ids", input_ids)
+    print("max`", input_ids.max())
+    print("min", input_ids.min())
+    
     with torch.inference_mode():
         output_ids = model.generate(
             input_ids=input_ids,

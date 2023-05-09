@@ -5,7 +5,7 @@ import os
 from llava.conversation import conv_templates
 from llava.utils import disable_torch_init
 from transformers import CLIPVisionModel, CLIPImageProcessor, StoppingCriteria
-
+import llava.model.modeling_llama as modeling_llama
 from PIL import Image
 
 import os
@@ -54,10 +54,10 @@ def eval_model(args):
     model_name = os.path.expanduser(args.model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
     if args.mm_projector is None:
-        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
+        model = modeling_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
         image_processor = CLIPImageProcessor.from_pretrained(model.config.mm_vision_tower, torch_dtype=torch.float16)
 
-        mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
+        mm_use_im_start_end = False #getattr(model.config, "mm_use_im_start_end", False)
         tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
         if mm_use_im_start_end:
             tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
@@ -72,12 +72,12 @@ def eval_model(args):
         image_token_len = (vision_config.image_size // vision_config.patch_size) ** 2
     else:
         # in case of using a pretrained model with only a MLP projector weights
-        model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
+        model = modeling_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
 
         vision_tower = CLIPVisionModel.from_pretrained(args.vision_tower, torch_dtype=torch.float16).cuda()
         image_processor = CLIPImageProcessor.from_pretrained(args.vision_tower, torch_dtype=torch.float16)
 
-        mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
+        mm_use_im_start_end =  False #getattr(model.config, "mm_use_im_start_end", False)
         tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
         if mm_use_im_start_end:
             tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
@@ -113,6 +113,8 @@ def eval_model(args):
 
     input_ids = torch.as_tensor(inputs.input_ids).cuda()
 
+    print('input_ids', input_ids)
+    
     keywords = ['###']
     stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
@@ -154,8 +156,8 @@ if __name__ == "__main__":
     parser.add_argument("--model-name", type=str, default="facebook/opt-350m")
     parser.add_argument("--image-file", type=str, required=True)
     parser.add_argument("--query", type=str, required=True)
-    parser.add_argument("--mm-projector", type=str, default=None)
-    parser.add_argument("--vision-tower", type=str, default=None)
+    parser.add_argument("--mm-projector", type=str, default="data/mm_projector/llava-7b-pretrain.bin")
+    parser.add_argument("--vision-tower", type=str, default="openai/clip-vit-large-patch14")
     parser.add_argument("--conv-mode", type=str, default="multimodal")
     parser.add_argument("--num-chunks", type=int, default=1)
     parser.add_argument("--chunk-idx", type=int, default=0)

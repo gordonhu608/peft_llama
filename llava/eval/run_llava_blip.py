@@ -6,7 +6,7 @@ from llava.conversation import conv_templates
 from llava.utils import disable_torch_init
 from transformers import CLIPVisionModel, CLIPImageProcessor, StoppingCriteria
 import llava.model.blip_llama_infer as blip_llama
-from llava.model.blip2_infer import Blip2Base
+from llava.model.blip2_infer import Blip2Base, disabled_train
 from llava.model.dist_utils import download_cached_file
 
 from PIL import Image
@@ -61,23 +61,30 @@ def eval_model(args):
 
     #model.model.load_state_dict(torch.load(lora_weight, map_location='cpu'))
 
-    vision_tower, _ =  Blip2Base.init_vision_encoder(
+    vision_tower, ln_vision =  Blip2Base.init_vision_encoder(
             model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16"
         )
-    
-        #  self.visual_encoder, self.ln_vision = Blip2Base.init_vision_encoder(
-        #     model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16"
-        # )
-    #CLIPVisionModel.from_pretrained(args.vision_tower, torch_dtype=torch.float16).cuda()
-    image_processor = CLIPImageProcessor.from_pretrained(args.vision_tower, torch_dtype=torch.float16)
+    freeze_vit = True # freeze vision encoder
+    if freeze_vit:
+        for name, param in vision_tower.named_parameters():
+            param.requires_grad = False
+        vision_tower.eval()
+        vision_tower.train = disabled_train
+        for name, param in ln_vision.named_parameters():
+            param.requires_grad = False
+        ln_vision.eval()
+        ln_vision.train = disabled_train
+            
+    image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16)
 
     mm_use_im_start_end =  False #getattr(model.config, "mm_use_im_start_end", False)
     tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
     #todo add pad token if for batched inference 
     
     model.model.visual_encoder = vision_tower
-    if mm_use_im_start_end:
-        tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+    model.model.ln_vision = ln_vision.half().cuda()
+    # if mm_use_im_start_end:
+    #     tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
 
     vision_config = vision_tower.config
     vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
@@ -95,6 +102,8 @@ def eval_model(args):
 
     # model.model.mm_projector = mm_projector.cuda().half()
     # model.model.vision_tower = [vision_tower]
+    Qformer, query_tokens = Blip2Base.init_Qformer(
+            num_query_token=32, vision_width=model.model.visual_encoder.num_features )
     
     q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
     cached_file = download_cached_file(
@@ -102,9 +111,27 @@ def eval_model(args):
         )
     q_former_checkpoint = torch.load(cached_file, map_location="cpu")
     q_former_state_dict = q_former_checkpoint["model"]
-    msg = model.model.Qformer.load_state_dict(q_former_state_dict, strict=False)
+    Qformer.load_state_dict(q_former_state_dict, strict=False)
     print("\nLoaded trainable pretrained Qformer weights")
 
+    Qformer.cls = None
+    Qformer.bert.embeddings.word_embeddings = None
+    Qformer.bert.embeddings.position_embeddings = None
+    for layer in Qformer.bert.encoder.layer:
+        layer.output = None
+        layer.intermediate = None
+    model.model.query_tokens = torch.nn.Parameter(torch.FloatTensor(query_tokens).half().to(device='cuda'))
+
+    model.model.Qformer = Qformer.half().cuda()
+    mm_projector =  torch.nn.Linear(
+            model.model.Qformer.config.hidden_size, model.model.config.hidden_size
+        )   #model.model.llama_proj
+    mm_projector_weights = torch.load("data/minigpt_proj_7b.pth", map_location='cpu')['model']
+    mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
+
+    model.model.llama_proj = mm_projector.half().cuda()
+    print("\nLoaded pretrained mm_projector")
+    
     qs = args.query
     if mm_use_im_start_end:
         qs = qs + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len + DEFAULT_IM_END_TOKEN
@@ -123,6 +150,8 @@ def eval_model(args):
     keywords = ['###']
     stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
+    # print("input_ids", input_ids)
+    # print("image_tensor", image_tensor.unsqueeze(0).half().cuda())
     with torch.inference_mode():
         output_ids = model.generate(
             input_ids,
@@ -137,6 +166,7 @@ def eval_model(args):
     if n_diff_input_output > 0:
         print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
     outputs = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
+    print("outputs", outputs)
 
     while True:
         cur_len = len(outputs)
