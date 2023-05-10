@@ -29,7 +29,7 @@ from torch.utils.data import Dataset
 from transformers import Trainer
 
 from llava import conversation as conversation_lib
-
+import llava.model.modeling_llama as modeling_llama
 from PIL import Image
 import torch.nn as nn
 
@@ -369,7 +369,7 @@ def train():
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
-    model = transformers.LlamaForCausalLM.from_pretrained(
+    model = modeling_llama.LlamaForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
     )

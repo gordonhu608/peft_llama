@@ -21,7 +21,7 @@ import json
 import logging
 import pathlib
 from typing import Dict, Optional, Sequence
-import sys 
+
 import torch
 
 import transformers
@@ -43,7 +43,6 @@ from peft import (
 from llava.model.blip2 import Blip2Base, disabled_train
 import llava.model.blip_llama as modeling_llama
 from llava.model.dist_utils import download_cached_file
-from llava.model.mask_model import MaskModel
 
 IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "[PAD]"
@@ -66,7 +65,6 @@ class ModelArguments:
     pretrain_mm_mlp_adapter: Optional[str] = field(default=None)
     mm_use_im_start_end: bool = field(default=False)
     maskmodel: bool = field(default=False)
-
 
 @dataclass
 class DataArguments:
@@ -300,7 +298,7 @@ class LazySupervisedDataset(Dataset):
                 image = processor.preprocess(image, return_tensors='pt', do_center_crop=False, size={"shortest_edge": shortest_edge})['pixel_values'][0]
             else:
                 image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            cur_token_len = 32 + 256 # (image.shape[1]//14) * (image.shape[2]//14)   # FIXME: 14 is hardcoded patch size
+            cur_token_len = 32 # (image.shape[1]//14) * (image.shape[2]//14)   # FIXME: 14 is hardcoded patch size
             sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in sources]),
                 self.multimodal_cfg, cur_token_len)
@@ -457,7 +455,7 @@ def train():
 
         vision_config = vision_tower.config
         
-        num_patches =  32  + 256 #(vision_config.image_size // vision_config.patch_size) ** 2
+        num_patches =  32 #(vision_config.image_size // vision_config.patch_size) ** 2
         data_args.image_token_len = num_patches
         data_args.image_processor = image_processor
         data_args.is_multimodal = True
@@ -484,7 +482,7 @@ def train():
             layer.intermediate = None
         model.model.query_tokens = torch.nn.Parameter(torch.FloatTensor(query_tokens).to(device=device))
 
-        model.model.Qformer = Qformer.to(device)
+        model.model.Qformer = Qformer.cuda()
         # model.config.use_mm_proj = True
         # model.config.mm_hidden_size = vision_config.hidden_size
         # model.config.mm_vision_select_layer = model_args.mm_vision_select_layer
@@ -494,16 +492,11 @@ def train():
         mm_projector =  torch.nn.Linear(
             model.model.Qformer.config.hidden_size, model.model.config.hidden_size
         )   #model.model.llama_proj
-        
+
         # if model_args.pretrain_mm_mlp_adapter is not None:
         #     mm_projector_weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')['model']
         #     mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
 
-        maskmodel = MaskModel().to(device)
-        mask_proj = nn.Linear(256, model.model.config.hidden_size)          
-        model.model.maskmodel = maskmodel
-        model.model.mask_proj = mask_proj
-    
         model.model.llama_proj = mm_projector
         #print("\nLoaded pretrained mm_projector")
         model.config.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
@@ -518,9 +511,6 @@ def train():
                 p.requires_grad = True
 
             model.model.query_tokens.requires_grad = True
-            
-            for p in model.model.mask_proj.parameters():
-                p.requires_grad = True
         
         # model.config.mm_use_im_start_end = model_args.mm_use_im_start_end
         # data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
@@ -582,8 +572,7 @@ def train():
     safe_save_model_for_hf_trainer(trainer=trainer,
                                    output_dir=training_args.output_dir)
 
-    model.save_pretrained('save_pretrained/seg_projection')
+    model.save_pretrained('save_pretrained/blip_projection_raw')
 
 if __name__ == "__main__":
-    #sys.path.append("/home/shawn/nvme/vl_research/peft_llama/llava/model/segment_anything")
     train()
