@@ -34,7 +34,7 @@ from transformers.models.llama.configuration_llama import LlamaConfig
 
 from llava.model.blip2 import Blip2Base, disabled_train
 from .dist_utils import download_cached_file
-
+from .mask_model import MaskModel
 logger = logging.get_logger(__name__)
 
 _CONFIG_FOR_DOC = "LlamaConfig"
@@ -464,6 +464,12 @@ class LlamaModel(LlamaPreTrainedModel):
         # Initialize weights and apply final processing
         self.post_init()
 
+        if hasattr(config, "maskmodel"):
+            print('Loading Mask Model')
+            self.maskmodel = MaskModel()
+            self.mask_proj = nn.Linear(256 , config.hidden_size)
+        else:
+            self.maskmodel = None
         # if hasattr(config, "mm_vision_tower"):
         #     from transformers import CLIPVisionModel
         #     self.vision_tower = [CLIPVisionModel.from_pretrained(config.mm_vision_tower)]
@@ -656,6 +662,7 @@ class LlamaModel(LlamaPreTrainedModel):
             #vision_tower = vision_tower[0]  # HACK: for FSDP
             with torch.no_grad():
                 if type(images) is list:
+                    print("\n we not supporting this yet \n ")
                     # variable length images
                     image_features = []
                     for image in images:
@@ -674,23 +681,39 @@ class LlamaModel(LlamaPreTrainedModel):
                         image_features.append(image_feature)
                 else:
                     image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) #.unsqueeze(0)
-                    query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
-                    image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
-                    image_features = self.Qformer.bert(
-                        query_embeds=query_tokens,
-                        encoder_hidden_states=image_embeds,
-                        encoder_attention_mask=image_atts,
-                        return_dict=True,
-                    )
+                    # query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+                    # image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
+                    # image_features = self.Qformer.bert(
+                    #     query_embeds=query_tokens,
+                    #     encoder_hidden_states=image_embeds,
+                    #     encoder_attention_mask=image_atts,
+                    #     return_dict=True,
+                    # )
             if type(images) is list:
                 image_features = [self.llama_proj(image_feature.last_hidden_state)[0] for image_feature in image_features]
             else:
+                query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+                image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
+                image_features = self.Qformer.bert(
+                    query_embeds=query_tokens,
+                    encoder_hidden_states=image_embeds,
+                    encoder_attention_mask=image_atts,
+                    return_dict=True,
+                )
                 image_features = self.llama_proj(image_features.last_hidden_state)
-                
+                if self.maskmodel is not None:
+                    mask_features = []
+                    for image in images:
+                        mask_feature = self.maskmodel(image)
+                        mask_features.append(mask_feature)
+                    mask_feature = self.mask_proj(torch.stack(mask_features, dim=0))
+                    image_features = torch.cat((image_features, mask_feature), dim=1)
+                    
             dummy_image_features = torch.zeros(32, 768, device=inputs_embeds.device, dtype=inputs_embeds.dtype) #originally 256, 1024
             #print("device checking", inputs_embeds.device)
             dummy_image_features = self.llama_proj(dummy_image_features) #[1,32, 4096]
-
+            #todo add dummy mask features 
+            
             new_input_embeds = []
             cur_image_idx = 0
             # print("input_ids", input_ids.shape) # [1, 191]
@@ -699,6 +722,7 @@ class LlamaModel(LlamaPreTrainedModel):
             for cur_input_ids, cur_input_embeds in zip(input_ids, inputs_embeds):
                 if (cur_input_ids == vision_tower.config.im_patch_token).sum() == 0:
                     # multimodal LLM, but the current sample is not multimodal
+                    print(' we are not at science qa yet')
                     cur_input_embeds = cur_input_embeds + (0. * dummy_image_features).sum()
                     new_input_embeds.append(cur_input_embeds)
                     continue
