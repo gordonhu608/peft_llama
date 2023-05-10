@@ -463,8 +463,8 @@ class LlamaModel(LlamaPreTrainedModel):
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
         self.post_init()
-
-        if hasattr(config, "maskmodel"):
+        
+        if config.maskmodel == True:
             print('Loading Mask Model')
             self.maskmodel = MaskModel()
             self.mask_proj = nn.Linear(256 , config.hidden_size)
@@ -702,6 +702,7 @@ class LlamaModel(LlamaPreTrainedModel):
                 )
                 image_features = self.llama_proj(image_features.last_hidden_state)
                 if self.maskmodel is not None:
+                    print("are you sure using maskmodel?")
                     mask_features = []
                     for image in images:
                         mask_feature = self.maskmodel(image)

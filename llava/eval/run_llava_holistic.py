@@ -53,61 +53,26 @@ def eval_model(args):
     disable_torch_init()
     model_name = os.path.expanduser(args.model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
-    if args.mm_projector is None:
-        model = modeling_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
-        image_processor = CLIPImageProcessor.from_pretrained(model.config.mm_vision_tower, torch_dtype=torch.float16)
+        
+    model = modeling_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
 
-        mm_use_im_start_end = False #getattr(model.config, "mm_use_im_start_end", False)
-        tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
-        if mm_use_im_start_end:
-            tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+    vision_tower = CLIPVisionModel.from_pretrained(args.vision_tower, torch_dtype=torch.float16).cuda()
+    image_processor = CLIPImageProcessor.from_pretrained(args.vision_tower, torch_dtype=torch.float16)
 
-        vision_tower = model.model.vision_tower[0]
-        vision_tower.to(device='cuda', dtype=torch.float16)
-        vision_config = vision_tower.config
-        vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
-        vision_config.use_im_start_end = mm_use_im_start_end
-        if mm_use_im_start_end:
-            vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
-        image_token_len = (vision_config.image_size // vision_config.patch_size) ** 2
-    else:
-        # in case of using a pretrained model with only a MLP projector weights
-        # #hack change the tokenizer size of the orginal vaciuna model to the llava model
-        # if 'vicuna'in args.model_name.lower():
-        #     for name in ['embed_tokens.weight', 'lm_head.weight']:
-                
-        #         old_weight = state_dict[name] # torch.Size([32000, 4096])
-        #         print("old_weight", old_weight.shape)
-        #         average_weight = old_weight.mean(dim=0, keepdim=True) # torch.Size([1, 4096])
-        #         new_weight = torch.cat([old_weight, average_weight.repeat(4, 1)], dim=0) # torch.Size([32004, 4096])
-        #         print("new_weight", new_weight.shape)
-        #         # Replace the weight in the state dictionary
-        #         state_dict[name] = new_weight
-            
-        model = modeling_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
+    mm_use_im_start_end =  False #getattr(model.config, "mm_use_im_start_end", False)
+    tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
+    if mm_use_im_start_end:
+        tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
 
-        vision_tower = CLIPVisionModel.from_pretrained(args.vision_tower, torch_dtype=torch.float16).cuda()
-        image_processor = CLIPImageProcessor.from_pretrained(args.vision_tower, torch_dtype=torch.float16)
+    vision_config = vision_tower.config
+    vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
+    vision_config.use_im_start_end = mm_use_im_start_end
+    if mm_use_im_start_end:
+        vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
 
-        mm_use_im_start_end =  False #getattr(model.config, "mm_use_im_start_end", False)
-        tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
-        if mm_use_im_start_end:
-            tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
-
-        vision_config = vision_tower.config
-        vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
-        vision_config.use_im_start_end = mm_use_im_start_end
-        if mm_use_im_start_end:
-            vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
-
-        image_token_len = (vision_config.image_size // vision_config.patch_size) ** 2
-
-        mm_projector = torch.nn.Linear(vision_config.hidden_size, model.config.hidden_size)
-        mm_projector_weights = torch.load(args.mm_projector, map_location='cpu')
-        mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items()})
-
-        model.model.mm_projector = mm_projector.cuda().half()
-        model.model.vision_tower = [vision_tower]
+    image_token_len = 256 #(vision_config.image_size // vision_config.patch_size) ** 2
+    
+    model.model.vision_tower.config = vision_config
 
     qs = args.query
     if mm_use_im_start_end:
