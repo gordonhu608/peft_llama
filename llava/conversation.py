@@ -240,10 +240,9 @@ simple_conv = Conversation(
     sep_style=SeparatorStyle.SINGLE,
     sep="###",
 )
-
+#hack modified 
 simple_conv_multimodal = Conversation(
-    system="You are LLaVA, a large language and vision assistant"
-           "You are able to understand the visual content that the user provides, and assist the user with a variety of tasks using natural language."
+    system="You are a large language and vision assistant who is able to understand the visual content that the user provides, and assist the user with a variety of tasks using natural language."
            "Follow the instructions carefully and explain your answers in detail.",
     roles=("Human", "Assistant"),
     messages=(

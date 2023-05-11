@@ -58,22 +58,33 @@ def eval_model(args):
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
   
     model = blip_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
-
+    
+    q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
+    cached_file = download_cached_file(
+            q_former_model, check_hash=False, progress=True
+        )
+    q_former_checkpoint = torch.load(cached_file, map_location="cpu")
+    q_former_state_dict = q_former_checkpoint["model"]
     #model.model.load_state_dict(torch.load(lora_weight, map_location='cpu'))
 
     vision_tower, ln_vision =  Blip2Base.init_vision_encoder(
             model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16"
         )
     freeze_vit = True # freeze vision encoder
-    if freeze_vit:
-        for name, param in vision_tower.named_parameters():
-            param.requires_grad = False
-        vision_tower.eval()
-        vision_tower.train = disabled_train
-        for name, param in ln_vision.named_parameters():
-            param.requires_grad = False
-        ln_vision.eval()
-        ln_vision.train = disabled_train
+  
+    for name, param in vision_tower.named_parameters():
+        param.requires_grad = False
+    vision_tower.eval()
+    vision_tower.train = disabled_train
+    
+    ln_vision_weight = q_former_state_dict['ln_vision.weight']
+    ln_vision_bias = q_former_state_dict['ln_vision.bias']
+    ln_vision.weight = torch.nn.Parameter(ln_vision_weight)
+    ln_vision.bias = torch.nn.Parameter(ln_vision_bias)
+    for name, param in ln_vision.named_parameters():
+        param.requires_grad = False
+    ln_vision.eval()
+    ln_vision.train = disabled_train
             
     image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16)
 
@@ -82,7 +93,7 @@ def eval_model(args):
     #todo add pad token if for batched inference 
     
     model.model.visual_encoder = vision_tower
-    model.model.ln_vision = ln_vision.half().cuda()
+    model.model.ln_vision = ln_vision.half() #.cuda()
     # if mm_use_im_start_end:
     #     tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
 
@@ -105,12 +116,6 @@ def eval_model(args):
     Qformer, query_tokens = Blip2Base.init_Qformer(
             num_query_token=32, vision_width=model.model.visual_encoder.num_features )
     
-    q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
-    cached_file = download_cached_file(
-            q_former_model, check_hash=False, progress=True
-        )
-    q_former_checkpoint = torch.load(cached_file, map_location="cpu")
-    q_former_state_dict = q_former_checkpoint["model"]
     Qformer.load_state_dict(q_former_state_dict, strict=False)
     print("\nLoaded trainable pretrained Qformer weights")
 
@@ -120,17 +125,29 @@ def eval_model(args):
     for layer in Qformer.bert.encoder.layer:
         layer.output = None
         layer.intermediate = None
-    model.model.query_tokens = torch.nn.Parameter(torch.FloatTensor(query_tokens).half().to(device='cuda'))
+        
+    model.model.query_tokens = torch.nn.Parameter(q_former_state_dict['query_tokens'].half())
+    
+    #model.model.query_tokens.half().cuda()
+    #query_tokens.load_state_dict(q_former_state_dict['query_tokens']).half().to(device='cuda')
 
-    model.model.Qformer = Qformer.half().cuda()
+    for name, param in model.model.Qformer.named_parameters():
+        param.requires_grad = False
+    model.model.Qformer.eval()
+    model.model.Qformer.train = disabled_train
+    model.model.query_tokens.requires_grad = False
+    model.model.Qformer = Qformer.half() #.cuda()
+    
     mm_projector =  torch.nn.Linear(
             model.model.Qformer.config.hidden_size, model.model.config.hidden_size
         )   #model.model.llama_proj
     mm_projector_weights = torch.load("data/minigpt_proj_7b.pth", map_location='cpu')['model']
     mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
 
-    model.model.llama_proj = mm_projector.half().cuda()
+    model.model.llama_proj = mm_projector.half() #.cuda()
     print("\nLoaded pretrained mm_projector")
+    
+    model = model.to(device='cuda')
     
     qs = args.query
     if mm_use_im_start_end:

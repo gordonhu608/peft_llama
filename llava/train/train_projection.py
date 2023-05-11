@@ -429,6 +429,13 @@ def train():
         if training_args.bf16:
             dtype = torch.bfloat16
 
+        q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
+        cached_file = download_cached_file(
+                q_former_model, check_hash=False, progress=True
+            )
+        q_former_checkpoint = torch.load(cached_file, map_location="cpu")
+        q_former_state_dict = q_former_checkpoint["model"]
+        
         # if not hasattr(model.model, 'vision_tower'):
         #     vision_tower = CLIPVisionModel.from_pretrained(model_args.vision_tower)
         # else:
@@ -440,6 +447,10 @@ def train():
             param.requires_grad = False
         vision_tower.eval()
         vision_tower.train = disabled_train
+        ln_vision_weight = q_former_state_dict['ln_vision.weight']
+        ln_vision_bias = q_former_state_dict['ln_vision.bias']
+        ln_vision.weight = torch.nn.Parameter(ln_vision_weight)
+        ln_vision.bias = torch.nn.Parameter(ln_vision_bias)
         for name, param in model.model.ln_vision.named_parameters():
             param.requires_grad = False
         ln_vision.eval()
@@ -465,12 +476,6 @@ def train():
         Qformer, query_tokens = Blip2Base.init_Qformer(
             num_query_token=32, vision_width=model.model.visual_encoder.num_features )
         
-        q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
-        cached_file = download_cached_file(
-                q_former_model, check_hash=False, progress=True
-            )
-        q_former_checkpoint = torch.load(cached_file, map_location="cpu")
-        q_former_state_dict = q_former_checkpoint["model"]
         Qformer.load_state_dict(q_former_state_dict, strict=False)
         #logger.info("Missing keys {}".format(msg.missing_keys))
         logging.info("load checkpoint Qformer from %s" % q_former_model)
@@ -482,6 +487,8 @@ def train():
         for layer in Qformer.bert.encoder.layer:
             layer.output = None
             layer.intermediate = None
+        model.model.query_tokens = query_tokens.load_state_dict(q_former_state_dict['query_tokens']).to(device=device)
+        
         model.model.query_tokens = torch.nn.Parameter(torch.FloatTensor(query_tokens).to(device=device))
 
         model.model.Qformer = Qformer.to(device)

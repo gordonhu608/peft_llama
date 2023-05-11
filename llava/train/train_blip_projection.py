@@ -427,6 +427,13 @@ def train():
         if training_args.bf16:
             dtype = torch.bfloat16
 
+        q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
+        cached_file = download_cached_file(
+                q_former_model, check_hash=False, progress=True
+            )
+        q_former_checkpoint = torch.load(cached_file, map_location="cpu")
+        q_former_state_dict = q_former_checkpoint["model"]
+        
         # if not hasattr(model.model, 'vision_tower'):
         #     vision_tower = CLIPVisionModel.from_pretrained(model_args.vision_tower)
         # else:
@@ -438,15 +445,21 @@ def train():
             param.requires_grad = False
         vision_tower.eval()
         vision_tower.train = disabled_train
-        for name, param in model.model.ln_vision.named_parameters():
+        
+        ln_vision_weight = q_former_state_dict['ln_vision.weight']
+        ln_vision_bias = q_former_state_dict['ln_vision.bias']
+        ln_vision.weight = torch.nn.Parameter(ln_vision_weight)
+        ln_vision.bias = torch.nn.Parameter(ln_vision_bias)
+
+        for name, param in ln_vision.named_parameters():
             param.requires_grad = False
         ln_vision.eval()
         ln_vision.train = disabled_train
         print("freeze vision encoder") # logging 
         vision_tower.requires_grad_(False)
         
-        vision_tower.to(dtype=dtype, device=next(model.model.visual_encoder.parameters()).device) 
-        ln_vision.to(dtype=dtype, device=next(model.model.visual_encoder.parameters()).device)
+        vision_tower = vision_tower.to(dtype=dtype) #, device=next(model.model.visual_encoder.parameters()).device) 
+        #ln_vision = ln_vision.to(dtype=dtype) #, device=next(model.model.visual_encoder.parameters()).device)
         model.model.visual_encoder = vision_tower    
         model.model.ln_vision = ln_vision
         print("\nLoading the pretrained vision encoder")
@@ -463,12 +476,6 @@ def train():
         Qformer, query_tokens = Blip2Base.init_Qformer(
             num_query_token=32, vision_width=model.model.visual_encoder.num_features )
         
-        q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
-        cached_file = download_cached_file(
-                q_former_model, check_hash=False, progress=True
-            )
-        q_former_checkpoint = torch.load(cached_file, map_location="cpu")
-        q_former_state_dict = q_former_checkpoint["model"]
         Qformer.load_state_dict(q_former_state_dict, strict=False)
         #logger.info("Missing keys {}".format(msg.missing_keys))
         logging.info("load checkpoint Qformer from %s" % q_former_model)
@@ -480,9 +487,9 @@ def train():
         for layer in Qformer.bert.encoder.layer:
             layer.output = None
             layer.intermediate = None
-        model.model.query_tokens = torch.nn.Parameter(torch.FloatTensor(query_tokens).to(device=device))
 
-        model.model.Qformer = Qformer.cuda()
+        model.model.query_tokens = torch.nn.Parameter(q_former_state_dict['query_tokens'])  #.to(dtype=dtype))
+        model.model.Qformer = Qformer #.to(dtype=dtype) #.cuda()
         # model.config.use_mm_proj = True
         # model.config.mm_hidden_size = vision_config.hidden_size
         # model.config.mm_vision_select_layer = model_args.mm_vision_select_layer
@@ -492,13 +499,14 @@ def train():
         mm_projector =  torch.nn.Linear(
             model.model.Qformer.config.hidden_size, model.model.config.hidden_size
         )   #model.model.llama_proj
-
-        # if model_args.pretrain_mm_mlp_adapter is not None:
-        #     mm_projector_weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')['model']
-        #     mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
-
-        model.model.llama_proj = mm_projector
-        #print("\nLoaded pretrained mm_projector")
+        mm_projector_weights = torch.load("data/minigpt_proj_7b.pth", map_location='cpu')['model']
+        mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
+    
+        model.model.llama_proj = mm_projector #.to(dtype=dtype)
+        print("\nLoaded pretrained mm_projector")
+        
+        model = model.to(device=device)
+        
         model.config.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
         if model_args.tune_mm_mlp_adapter:
             print("we are pretraining vision language projection layer")
@@ -506,10 +514,10 @@ def train():
             
             for p in model.model.llama_proj.parameters():
                  p.requires_grad = True
-
+            for p in model.model.ln_vision.parameters():
+                p.requires_grad = True
             for p in model.model.Qformer.parameters():
                 p.requires_grad = True
-
             model.model.query_tokens.requires_grad = True
         
         # model.config.mm_use_im_start_end = model_args.mm_use_im_start_end
@@ -572,7 +580,7 @@ def train():
     safe_save_model_for_hf_trainer(trainer=trainer,
                                    output_dir=training_args.output_dir)
 
-    model.save_pretrained('save_pretrained/blip_projection_raw')
+    model.save_pretrained('save_pretrained/blip_projection_fixed')
 
 if __name__ == "__main__":
     train()

@@ -54,7 +54,7 @@ class Blip2Base(BaseModel):
         query_tokens = nn.Parameter(
             torch.zeros(1, num_query_token, encoder_config.hidden_size)
         )
-        query_tokens.data.normal_(mean=0.0, std=encoder_config.initializer_range)
+        query_tokens.data.normal_(mean=0.0, std=encoder_config.initializer_range) #std = 0.02
         return Qformer, query_tokens
 
     @classmethod
