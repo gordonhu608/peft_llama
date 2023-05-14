@@ -59,7 +59,7 @@ def eval_model(args):
     vision_tower = CLIPVisionModel.from_pretrained(args.vision_tower, torch_dtype=torch.float16).cuda()
     image_processor = CLIPImageProcessor.from_pretrained(args.vision_tower, torch_dtype=torch.float16)
 
-    mm_use_im_start_end =  False #getattr(model.config, "mm_use_im_start_end", False)
+    mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
     tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
     if mm_use_im_start_end:
         tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
@@ -70,9 +70,10 @@ def eval_model(args):
     if mm_use_im_start_end:
         vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
 
-    image_token_len = 256 #(vision_config.image_size // vision_config.patch_size) ** 2
+    image_token_len = (vision_config.image_size // vision_config.patch_size) ** 2
     
-    model.model.vision_tower.config = vision_config
+    model.model.vision_tower = [vision_tower]
+    model.model.vision_tower[0].config = vision_config
 
     qs = args.query
     if mm_use_im_start_end:
@@ -91,6 +92,8 @@ def eval_model(args):
     input_ids = torch.as_tensor(inputs.input_ids).cuda()
 
     print('input_ids', input_ids)
+    
+    model = model.to(device="cuda")
     
     keywords = ['###']
     stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
@@ -133,7 +136,7 @@ if __name__ == "__main__":
     parser.add_argument("--model-name", type=str, default="facebook/opt-350m")
     parser.add_argument("--image-file", type=str, required=True)
     parser.add_argument("--query", type=str, required=True)
-    parser.add_argument("--mm-projector", type=str, default= "data/LLaVA-7b-pretrain-projector-v0-CC3M-595K-original_caption.bin")     #"data/mm_projector/llava-7b-pretrain.bin") # this is stage 2 
+    #parser.add_argument("--mm-projector", type=str, default= "data/LLaVA-7b-pretrain-projector-v0-CC3M-595K-original_caption.bin")     #"data/mm_projector/llava-7b-pretrain.bin") # this is stage 2 
     parser.add_argument("--vision-tower", type=str, default="openai/clip-vit-large-patch14")
     parser.add_argument("--conv-mode", type=str, default="multimodal")
     parser.add_argument("--num-chunks", type=int, default=1)

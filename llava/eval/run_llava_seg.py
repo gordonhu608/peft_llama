@@ -151,6 +151,7 @@ def eval_model(args):
     keywords = ['###']
     stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
+    model = model.eval()
     # print("input_ids", input_ids)
     # print("image_tensor", image_tensor.unsqueeze(0).half().cuda())
     with torch.inference_mode():

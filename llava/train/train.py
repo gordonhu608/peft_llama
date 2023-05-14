@@ -433,6 +433,7 @@ def train():
             mm_projector = nn.Linear(vision_config.hidden_size, model.config.hidden_size)
         else:
             mm_projector = model.model.mm_projector
+            print("using model's original mm_projector")
         model.model.mm_projector = mm_projector
 
         if model_args.pretrain_mm_mlp_adapter is not None:
@@ -494,6 +495,7 @@ def train():
                     **data_module)
 
     if list(pathlib.Path(training_args.output_dir).glob("checkpoint-*")):
+        print("\nResuming from checkpoint...")
         trainer.train(resume_from_checkpoint=True)
     else:
         trainer.train()

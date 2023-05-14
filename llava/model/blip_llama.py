@@ -681,25 +681,26 @@ class LlamaModel(LlamaPreTrainedModel):
                         image_features.append(image_feature)
                 else:
                     image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) #.unsqueeze(0)
-                    # query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
-                    # image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
-                    # image_features = self.Qformer.bert(
-                    #     query_embeds=query_tokens,
-                    #     encoder_hidden_states=image_embeds,
-                    #     encoder_attention_mask=image_atts,
-                    #     return_dict=True,
-                    # )
+                    query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+                    image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
+                    image_features = self.Qformer.bert(
+                        query_embeds=query_tokens,
+                        encoder_hidden_states=image_embeds,
+                        encoder_attention_mask=image_atts,
+                        return_dict=True,
+                    )
             if type(images) is list:
                 image_features = [self.llama_proj(image_feature.last_hidden_state)[0] for image_feature in image_features]
             else:
-                query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
-                image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
-                image_features = self.Qformer.bert(
-                    query_embeds=query_tokens,
-                    encoder_hidden_states=image_embeds,
-                    encoder_attention_mask=image_atts,
-                    return_dict=True,
-                )
+                #fix don't forget to change this back
+                # query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
+                # image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
+                # image_features = self.Qformer.bert(
+                #     query_embeds=query_tokens,
+                #     encoder_hidden_states=image_embeds,
+                #     encoder_attention_mask=image_atts,
+                #     return_dict=True,
+                # )
                 image_features = self.llama_proj(image_features.last_hidden_state)
                 if self.maskmodel is not None:
                     print("are you sure using maskmodel?")

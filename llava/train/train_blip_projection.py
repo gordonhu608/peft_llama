@@ -514,11 +514,11 @@ def train():
             
             for p in model.model.llama_proj.parameters():
                  p.requires_grad = True
-            for p in model.model.ln_vision.parameters():
-                p.requires_grad = True
-            for p in model.model.Qformer.parameters():
-                p.requires_grad = True
-            model.model.query_tokens.requires_grad = True
+            # for p in model.model.ln_vision.parameters():
+            #     p.requires_grad = True
+            # for p in model.model.Qformer.parameters():
+            #     p.requires_grad = True
+            # model.model.query_tokens.requires_grad = True
         
         # model.config.mm_use_im_start_end = model_args.mm_use_im_start_end
         # data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
@@ -580,7 +580,7 @@ def train():
     safe_save_model_for_hf_trainer(trainer=trainer,
                                    output_dir=training_args.output_dir)
 
-    model.save_pretrained('save_pretrained/blip_projection_fixed')
+    #model.save_pretrained('save_pretrained/blip_projection_no_grad')
 
 if __name__ == "__main__":
     train()

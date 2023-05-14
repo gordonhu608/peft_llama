@@ -440,12 +440,12 @@ LLAMA_INPUTS_DOCSTRING = r"""
     LLAMA_START_DOCSTRING,
 )
 class LlamaModel(LlamaPreTrainedModel):
-    """
-    Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`LlamaDecoderLayer`]
+    # """
+    # Transformer decoder consisting of *config.num_hidden_layers* layers. Each layer is a [`LlamaDecoderLayer`]
 
-    Args:
-        config: LlamaConfig
-    """
+    # Args:
+    #     config: LlamaConfig
+    # """
 
     def __init__(self, config: LlamaConfig):
         super().__init__(config)
@@ -506,49 +506,49 @@ class LlamaModel(LlamaPreTrainedModel):
         images: Optional[torch.FloatTensor] = None,
         return_dict: Optional[bool] = None,
     ) -> Union[Tuple, BaseModelOutputWithPast]:
-        r"""
-        Args:
-            input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
-                Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you
-                provide it.
+        # r"""
+        # Args:
+        #     input_ids (`torch.LongTensor` of shape `(batch_size, sequence_length)`):
+        #         Indices of input sequence tokens in the vocabulary. Padding will be ignored by default should you
+        #         provide it.
 
-                Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
-                [`PreTrainedTokenizer.__call__`] for details.
+        #         Indices can be obtained using [`AutoTokenizer`]. See [`PreTrainedTokenizer.encode`] and
+        #         [`PreTrainedTokenizer.__call__`] for details.
 
-                [What are input IDs?](../glossary#input-ids)
-            attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
-                Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
+        #         [What are input IDs?](../glossary#input-ids)
+        #     attention_mask (`torch.Tensor` of shape `(batch_size, sequence_length)`, *optional*):
+        #         Mask to avoid performing attention on padding token indices. Mask values selected in `[0, 1]`:
 
-                - 1 for tokens that are **not masked**,
-                - 0 for tokens that are **masked**.
+        #         - 1 for tokens that are **not masked**,
+        #         - 0 for tokens that are **masked**.
 
-                [What are attention masks?](../glossary#attention-mask)
-            past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
-                Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of
-                shape `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional tensors of
+        #         [What are attention masks?](../glossary#attention-mask)
+        #     past_key_values (`tuple(tuple(torch.FloatTensor))`, *optional*, returned when `use_cache=True` is passed or when `config.use_cache=True`):
+        #         Tuple of `tuple(torch.FloatTensor)` of length `config.n_layers`, with each tuple having 2 tensors of
+        #         shape `(batch_size, num_heads, sequence_length, embed_size_per_head)`) and 2 additional tensors of
 
-                Contains pre-computed hidden-states (key and values in the self-attention blocks and in the
-                cross-attention blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
+        #         Contains pre-computed hidden-states (key and values in the self-attention blocks and in the
+        #         cross-attention blocks) that can be used (see `past_key_values` input) to speed up sequential decoding.
 
-                If `past_key_values` are used, the user can optionally input only the last `decoder_input_ids` (those
-                that don't have their past key value states given to this model) of shape `(batch_size, 1)` instead of
-                all `decoder_input_ids` of shape `(batch_size, sequence_length)`.
-            use_cache (`bool`, *optional*):
-                If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
-                (see `past_key_values`).
-            inputs_embeds (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
-                Optionally, instead of passing `input_ids` you can choose to directly pass an embedded representation.
-                This is useful if you want more control over how to convert `input_ids` indices into associated vectors
-                than the model's internal embedding lookup matrix.
-            output_attentions (`bool`, *optional*):
-                Whether or not to return the attentions tensors of all attention layers. See `attentions` under
-                returned tensors for more detail.
-            output_hidden_states (`bool`, *optional*):
-                Whether or not to return the hidden states of all layers. See `hidden_states` under returned tensors
-                for more detail.
-            return_dict (`bool`, *optional*):
-                Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
-        """
+        #         If `past_key_values` are used, the user can optionally input only the last `decoder_input_ids` (those
+        #         that don't have their past key value states given to this model) of shape `(batch_size, 1)` instead of
+        #         all `decoder_input_ids` of shape `(batch_size, sequence_length)`.
+        #     use_cache (`bool`, *optional*):
+        #         If set to `True`, `past_key_values` key value states are returned and can be used to speed up decoding
+        #         (see `past_key_values`).
+        #     inputs_embeds (`torch.FloatTensor` of shape `(batch_size, sequence_length, hidden_size)`, *optional*):
+        #         Optionally, instead of passing `input_ids` you can choose to directly pass an embedded representation.
+        #         This is useful if you want more control over how to convert `input_ids` indices into associated vectors
+        #         than the model's internal embedding lookup matrix.
+        #     output_attentions (`bool`, *optional*):
+        #         Whether or not to return the attentions tensors of all attention layers. See `attentions` under
+        #         returned tensors for more detail.
+        #     output_hidden_states (`bool`, *optional*):
+        #         Whether or not to return the hidden states of all layers. See `hidden_states` under returned tensors
+        #         for more detail.
+        #     return_dict (`bool`, *optional*):
+        #         Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
+        # """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
