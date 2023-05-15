@@ -458,7 +458,7 @@ def train():
         print("freeze vision encoder") # logging 
         vision_tower.requires_grad_(False)
         
-        vision_tower = vision_tower.to(dtype=dtype) #, device=next(model.model.visual_encoder.parameters()).device) 
+        vision_tower = vision_tower.to(dtype=dtype, device=training_args.device) #, device=next(model.model.visual_encoder.parameters()).device) 
         #ln_vision = ln_vision.to(dtype=dtype) #, device=next(model.model.visual_encoder.parameters()).device)
         model.model.visual_encoder = vision_tower    
         model.model.ln_vision = ln_vision
@@ -505,8 +505,6 @@ def train():
         model.model.llama_proj = mm_projector #.to(dtype=dtype)
         print("\nLoaded pretrained mm_projector")
         
-        model = model.to(device=device)
-        
         model.config.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
         if model_args.tune_mm_mlp_adapter:
             print("we are pretraining vision language projection layer")
@@ -514,18 +512,18 @@ def train():
             
             for p in model.model.llama_proj.parameters():
                  p.requires_grad = True
-            # for p in model.model.ln_vision.parameters():
-            #     p.requires_grad = True
-            # for p in model.model.Qformer.parameters():
-            #     p.requires_grad = True
-            # model.model.query_tokens.requires_grad = True
+            for p in model.model.ln_vision.parameters():
+                p.requires_grad = True
+            for p in model.model.Qformer.parameters():
+                p.requires_grad = True
+            model.model.query_tokens.requires_grad = True
         
         # model.config.mm_use_im_start_end = model_args.mm_use_im_start_end
         # data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
         tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
         vision_config.use_im_start_end = model_args.mm_use_im_start_end
         if model_args.mm_use_im_start_end:
-            logging.warning("Don't use im_start_end token")
+            print("ok, we definitly should use im start end tokens")
             num_new_tokens = tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
             model.resize_token_embeddings(len(tokenizer))
             vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
@@ -543,7 +541,7 @@ def train():
                 output_embeddings[-num_new_tokens:] = output_embeddings_avg
 
             if model_args.tune_mm_mlp_adapter:
-                model.model.orig_embeds_params = [model.get_input_embeddings().weight.data.clone().to(device=next(model.model.llama_proj.parameters()).device)] # training_args.device
+                model.model.orig_embeds_params = [model.get_input_embeddings().weight.data.clone().to(device=training_args.device)]
                 for p in model.get_input_embeddings().parameters():
                     p.requires_grad = True
                 for p in model.get_output_embeddings().parameters():
@@ -564,6 +562,7 @@ def train():
 
         model.model.visual_encoder.config = vision_config
 
+        model = model.to(device=training_args.device)
 
     data_module = make_supervised_data_module(tokenizer=tokenizer,
                                               data_args=data_args)
