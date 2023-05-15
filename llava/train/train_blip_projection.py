@@ -65,6 +65,7 @@ class ModelArguments:
     pretrain_mm_mlp_adapter: Optional[str] = field(default=None)
     mm_use_im_start_end: bool = field(default=False)
     maskmodel: bool = field(default=False)
+    qformer_text_input: bool = field(default=True) 
 
 @dataclass
 class DataArguments:
@@ -221,6 +222,17 @@ def preprocess(
     4. Make a deepcopy as the target. Mask human words with IGNORE_INDEX.
     """
     # add end signal and concatenate together
+    
+    #hack q_former text input 
+    
+    def strip_word_from_string(sentence, word):
+        if sentence.startswith(word):
+            sentence = sentence[len(word):].lstrip()
+        if sentence.endswith(word):
+            sentence = sentence[:-len(word)].rstrip()
+        return sentence
+
+    qformer_text_input = []
     conversations = []
     for source in sources:
         header = f"{conversation_lib.default_conversation.system}\n\n"
@@ -231,12 +243,14 @@ def preprocess(
     input_ids = conversations_tokenized["input_ids"]
     targets = copy.deepcopy(input_ids)
     for target, source in zip(targets, sources):
+        temp = "".join([strip_word_from_string(s['value'], '<image>') for s in source if s["from"] == "human"])
+        qformer_text_input.append(temp)
         tokenized_lens = _tokenize_fn([header] + [s["value"] for s in source],
                                       tokenizer)["input_ids_lens"]
         speakers = [sentence["from"] for sentence in source]
         _mask_targets(target, tokenized_lens, speakers)
-
-    return dict(input_ids=input_ids, labels=targets)
+    #print("check qformer text input length = 1", len(qformer_text_input))
+    return dict(input_ids=input_ids, labels=targets, qformer_text_input=qformer_text_input)
 
 
 class SupervisedDataset(Dataset):
@@ -309,7 +323,8 @@ class LazySupervisedDataset(Dataset):
             self.tokenizer)
         if isinstance(i, int):
             data_dict = dict(input_ids=data_dict["input_ids"][0],
-                             labels=data_dict["labels"][0])
+                             labels=data_dict["labels"][0], 
+                             qformer_text_input=data_dict["qformer_text_input"][0])
 
         # image exist in the data
         if 'image' in self.list_data_dict[i]:
@@ -330,6 +345,7 @@ class DataCollatorForSupervisedDataset(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         input_ids, labels = tuple([instance[key] for instance in instances]
                                   for key in ("input_ids", "labels"))
+        text_input = [instance['qformer_text_input'] for instance in instances]
         input_ids = torch.nn.utils.rnn.pad_sequence(
             input_ids,
             batch_first=True,
@@ -341,6 +357,7 @@ class DataCollatorForSupervisedDataset(object):
             input_ids=input_ids,
             labels=labels,
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+            text_input=text_input,
         )
 
         if 'image' in instances[0]:
@@ -420,6 +437,8 @@ def train():
     if model_args.vision_tower is not None:
         #model.config.mm_vision_tower = model_args.vision_tower
 
+        qformer_tokenizer = Blip2Base.init_tokenizer(truncation_side="left")
+        
         from transformers import CLIPVisionModel, CLIPImageProcessor
         dtype = torch.float32
         if training_args.fp16:
@@ -481,15 +500,20 @@ def train():
         logging.info("load checkpoint Qformer from %s" % q_former_model)
         print("\nLoaded trainable pretrained Qformer weights")
         
+        if not model_args.qformer_text_input:
+            Qformer.bert.embeddings.word_embeddings = None
+            Qformer.bert.embeddings.position_embeddings = None
+            for layer in Qformer.bert.encoder.layer:
+                layer.output = None
+                layer.intermediate = None
+        else:
+            Qformer.resize_token_embeddings(len(qformer_tokenizer))
+        
         Qformer.cls = None
-        Qformer.bert.embeddings.word_embeddings = None
-        Qformer.bert.embeddings.position_embeddings = None
-        for layer in Qformer.bert.encoder.layer:
-            layer.output = None
-            layer.intermediate = None
 
         model.model.query_tokens = torch.nn.Parameter(q_former_state_dict['query_tokens'])  #.to(dtype=dtype))
         model.model.Qformer = Qformer #.to(dtype=dtype) #.cuda()
+        model.model.tokenizer = qformer_tokenizer
         # model.config.use_mm_proj = True
         # model.config.mm_hidden_size = vision_config.hidden_size
         # model.config.mm_vision_select_layer = model_args.mm_vision_select_layer
@@ -512,14 +536,14 @@ def train():
             
             for p in model.model.llama_proj.parameters():
                  p.requires_grad = True
-            for p in model.model.ln_vision.parameters():
-                p.requires_grad = True
+            # for p in model.model.ln_vision.parameters():
+            #     p.requires_grad = True
             for p in model.model.Qformer.parameters():
                 p.requires_grad = True
             model.model.query_tokens.requires_grad = True
         
-        # model.config.mm_use_im_start_end = model_args.mm_use_im_start_end
-        # data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
+        model.config.mm_use_im_start_end = model_args.mm_use_im_start_end
+        data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
         tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
         vision_config.use_im_start_end = model_args.mm_use_im_start_end
         if model_args.mm_use_im_start_end:
