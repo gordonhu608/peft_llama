@@ -20,7 +20,7 @@
 """ PyTorch LLaMA model."""
 import math
 from typing import List, Optional, Tuple, Union
-
+import sys 
 import torch
 import torch.utils.checkpoint
 from torch import nn
@@ -690,6 +690,8 @@ class LlamaModel(LlamaPreTrainedModel):
                         image_features.append(image_feature)
                 else:
                     image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) #.unsqueeze(0)
+                    # print("torch.isfinite(image_embed).all(): {}, min. {:.5f}, max. {:.5f}".format(torch.isfinite(image_embeds).all(), image_embeds.min(), image_embeds.max()))
+                    # sys.exit(1)
                     # query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
                     # image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
                     # image_features = self.Qformer.bert(
@@ -734,6 +736,9 @@ class LlamaModel(LlamaPreTrainedModel):
                         encoder_attention_mask=image_atts,
                         return_dict=True,
                     )
+                # print("queryoutput dtype", query_output.last_hidden_state[:,:query_tokens.size(1),:].dtype)
+                # print("llama_proj dtype", self.llama_proj.weight.dtype, self.llama_proj.bias.dtype)
+                 
                 image_features = self.llama_proj(query_output.last_hidden_state[:,:query_tokens.size(1),:])
                 if self.maskmodel is not None:
                     print("are you sure using maskmodel?")
@@ -743,8 +748,11 @@ class LlamaModel(LlamaPreTrainedModel):
                         mask_features.append(mask_feature)
                     mask_feature = self.mask_proj(torch.stack(mask_features, dim=0))
                     image_features = torch.cat((image_features, mask_feature), dim=1)
-                    
+            
+                     
             dummy_image_features = torch.zeros(32, 768, device=inputs_embeds.device, dtype=inputs_embeds.dtype) #originally 256, 1024
+            #print("dummy_image+features dtype", dummy_image_features.dtype)
+            #dummy_image_features = dummy_image_features.to(dtype=torch.float16)
             #print("device checking", inputs_embeds.device)
             dummy_image_features = self.llama_proj(dummy_image_features) #[1,32, 4096]
             #todo add dummy mask features 

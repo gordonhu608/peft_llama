@@ -56,45 +56,71 @@ def eval_model(args):
     disable_torch_init()
     model_name = os.path.expanduser(args.model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
-  
-    model = blip_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
+    
+    #hack changed it 32
+    model = blip_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).cuda() 
+    #print(model.model.Qformer.dtype)
+    #model.model.Qformer = model.model.Qformer.to(dtype=torch.float32)
+    #-------------------------------------------------------
+    # qformer_tokenizer = Blip2Base.init_tokenizer(truncation_side="left")
+    # #model.model.load_state_dict(torch.load(lora_weight, map_location='cpu'))
+    # q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
+    # cached_file = download_cached_file(
+    #         q_former_model, check_hash=False, progress=True
+    #     )
+    # q_former_checkpoint = torch.load(cached_file, map_location="cpu")
+    # q_former_state_dict = q_former_checkpoint["model"]
 
-    #model.model.load_state_dict(torch.load(lora_weight, map_location='cpu'))
+    # vision_tower, ln_vision =  Blip2Base.init_vision_encoder(
+    #         model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16" ## hack changed it to fp16
+    #     )
+    # freeze_vit = True # freeze vision encoder
 
-    vision_tower, ln_vision =  Blip2Base.init_vision_encoder(
-            model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16"
-        )
-    freeze_vit = True # freeze vision encoder
-    if freeze_vit:
-        for name, param in vision_tower.named_parameters():
-            param.requires_grad = False
-        vision_tower.eval()
-        vision_tower.train = disabled_train
-        for name, param in ln_vision.named_parameters():
-            param.requires_grad = False
-        ln_vision.eval()
-        ln_vision.train = disabled_train
-            
-    image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16)
+    # for name, param in vision_tower.named_parameters():
+    #     param.requires_grad = False
+    # vision_tower.eval()
+    # vision_tower.train = disabled_train
 
-    mm_use_im_start_end =  False #getattr(model.config, "mm_use_im_start_end", False)
+    # ln_vision_weight = q_former_state_dict['ln_vision.weight']
+    # ln_vision_bias = q_former_state_dict['ln_vision.bias']
+    # ln_vision.weight = torch.nn.Parameter(ln_vision_weight).to(torch.float32)
+    # ln_vision.bias = torch.nn.Parameter(ln_vision_bias).to(torch.float32)
+    # for name, param in ln_vision.named_parameters():
+    #     param.requires_grad = False
+    # ln_vision.eval()
+    # ln_vision.train = disabled_train
+
+    # Qformer, query_tokens = Blip2Base.init_Qformer(
+    #     num_query_token=32, vision_width=model.model.visual_encoder.num_features )
+    
+    # Qformer.load_state_dict(q_former_state_dict, strict=False)
+    # Qformer.resize_token_embeddings(len(qformer_tokenizer))
+    
+    # Qformer.cls = None
+    # q = q_former_state_dict['query_tokens'].clone().detach().to(dtype=torch.float16) #.requires_grad_(True)
+    # #q = torch.tensor(q_former_state_dict['query_tokens'], dtype=torch.float16)
+    # model.model.query_tokens = torch.nn.Parameter(q)     
+    # model.model.Qformer = Qformer.half()   
+    # model.model.visual_encoder = vision_tower
+    # model.model.ln_vision = ln_vision   #.half().cuda()
+    # model.model.tokenizer = qformer_tokenizer
+    # -------------------------------------------------------
+    image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.bfloat16)
+
+    mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
+    print("mm_use_im", mm_use_im_start_end)
     tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
     image_token_len = 32  
     #todo add pad token if for batched inference 
     
-    # model.model.visual_encoder = vision_tower
-    # model.model.ln_vision = ln_vision.half().cuda()
-    # # if mm_use_im_start_end:
-    # #     tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+    if mm_use_im_start_end:
+        tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
 
     vision_config = model.model.visual_encoder.config
     vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
     vision_config.use_im_start_end = mm_use_im_start_end
-    # if mm_use_im_start_end:
-    #     print("\n not supported yet \n")
-    #     vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
-
-    #(vision_config.image_size // vision_config.patch_size) ** 2
+    if mm_use_im_start_end:
+        vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
     
     model.model.visual_encoder.config = vision_config
     # # mm_projector = torch.nn.Linear(vision_config.hidden_size, model.config.hidden_size)
@@ -133,7 +159,10 @@ def eval_model(args):
     # model.model.llama_proj = mm_projector.half().cuda()
     # print("\nLoaded pretrained mm_projector")
     
+    model.to("cuda")
+    
     qs = args.query
+    text_input = args.query
     if mm_use_im_start_end:
         qs = qs + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len + DEFAULT_IM_END_TOKEN
     else:
@@ -151,13 +180,14 @@ def eval_model(args):
     keywords = ['###']
     stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
-    model = model.eval()
-    # print("input_ids", input_ids)
-    # print("image_tensor", image_tensor.unsqueeze(0).half().cuda())
+    #model = model.eval()
+    print("input_ids", input_ids)
+    #print("image_tensor", image_tensor.unsqueeze(0).half().cuda())
     with torch.inference_mode():
         output_ids = model.generate(
             input_ids,
-            images=image_tensor.unsqueeze(0).half().cuda(),
+            text_input=text_input, 
+            images=image_tensor.unsqueeze(0).cuda(),
             do_sample=True,
             temperature=0.7,
             max_new_tokens=1024,
@@ -194,7 +224,7 @@ if __name__ == "__main__":
     parser.add_argument("--image-file", type=str, required=True)
     parser.add_argument("--query", type=str, required=True)
     parser.add_argument("--mm-projector", type=str, default=None)
-    parser.add_argument("--vision-tower", type=str, default=None)
+    parser.add_argument("--vision-tower", type=str, default="openai/clip-vit-large-patch14")
     parser.add_argument("--conv-mode", type=str, default="multimodal")
     parser.add_argument("--num-chunks", type=int, default=1)
     parser.add_argument("--chunk-idx", type=int, default=0)

@@ -1,8 +1,8 @@
 WORLD_SIZE=1 CUDA_VISIBLE_DEVICES=0 \
 python llava/train/train.py \
-    --model_name_or_path ./data/llama_vicuna_7b \
-    --data_path ../chat.json \
-    --image_folder ../CC-3M \
+    --model_name_or_path llama_vicuna_7b \
+    --data_path chat.json \
+    --image_folder CC-3M \
     --vision_tower openai/clip-vit-large-patch14 \
     --tune_mm_mlp_adapter True \
     --mm_vision_select_layer -2 \
@@ -10,9 +10,9 @@ python llava/train/train.py \
     --bf16 True \
     --output_dir ./checkpoints/llava-7b-pretrain \
     --num_train_epochs 1 \
-    --per_device_train_batch_size 16 \
+    --per_device_train_batch_size 8 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 8 \
+    --gradient_accumulation_steps 16 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
     --save_steps 1200 \

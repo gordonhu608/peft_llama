@@ -23,12 +23,12 @@ from .base_model import BaseModel
 from .Qformer import BertConfig, BertLMHeadModel
 from .eva_vit_infer import create_eva_vit_g
 from transformers import BertTokenizer
-
+from pdb import set_trace as bcp 
 
 class Blip2Base(BaseModel):
     @classmethod
-    def init_tokenizer(cls):
-        tokenizer = BertTokenizer.from_pretrained("bert-base-uncased")
+    def init_tokenizer(cls, truncation_side="right"):
+        tokenizer = BertTokenizer.from_pretrained("bert-base-uncased", truncation_side=truncation_side)
         tokenizer.add_special_tokens({"bos_token": "[DEC]"})
         return tokenizer
 
@@ -54,7 +54,7 @@ class Blip2Base(BaseModel):
         query_tokens = nn.Parameter(
             torch.zeros(1, num_query_token, encoder_config.hidden_size)
         )
-        query_tokens.data.normal_(mean=0.0, std=encoder_config.initializer_range)
+        query_tokens.data.normal_(mean=0.0, std=encoder_config.initializer_range) #std = 0.02
         return Qformer, query_tokens
 
     @classmethod
@@ -101,7 +101,10 @@ class LayerNorm(nn.LayerNorm):
 
     def forward(self, x: torch.Tensor):
         orig_type = x.dtype
-        ret = super().forward(x)              #    x.type(torch.float32))
+       # print('x', x.dtype, x.shape, x)
+        x = x.to(dtype=torch.float32)
+        #print('x, after', x.dtype)
+        ret = super().forward(x)   #x.type(torch.float32))
         return ret.type(orig_type)
 
 

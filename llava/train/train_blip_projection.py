@@ -510,9 +510,12 @@ def train():
             Qformer.resize_token_embeddings(len(qformer_tokenizer))
         
         Qformer.cls = None
-
+        
+        #model.model.query_tokens = torch.nn.Parameter(q_former_state_dict['query_tokens'].clone().detach().requires_grad_(True).to(dtype=torch.float16))  
         model.model.query_tokens = torch.nn.Parameter(q_former_state_dict['query_tokens'])  #.to(dtype=dtype))
-        model.model.Qformer = Qformer #.to(dtype=dtype) #.cuda()
+        print("orginal Qformer dtype", model.model.Qformer.dtype)
+        print("init Qformer dytype", model.model.Qformer.dtype)
+        model.model.Qformer = Qformer #.half() #.to(dtype=dtype) #.cuda()
         model.model.tokenizer = qformer_tokenizer
         # model.config.use_mm_proj = True
         # model.config.mm_hidden_size = vision_config.hidden_size
@@ -526,7 +529,8 @@ def train():
         mm_projector_weights = torch.load("data/minigpt_proj_7b.pth", map_location='cpu')['model']
         mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
     
-        model.model.llama_proj = mm_projector #.to(dtype=dtype)
+        model.model.llama_proj = mm_projector #.to(dtype=torch.float16)
+        print("mm_projector dtype", mm_projector.weight.dtype, mm_projector.bias.dtype)
         print("\nLoaded pretrained mm_projector")
         
         model.config.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
@@ -587,6 +591,81 @@ def train():
         model.model.visual_encoder.config = vision_config
 
         model = model.to(device=training_args.device)
+    #-----------------------------------------------
+    qs = "Provide a brief description of the given image"
+    text_input = "Provide a brief description of the given image"
+    image_token_len = 32 
+    qs = qs + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len + DEFAULT_IM_END_TOKEN
+    from llava.conversation import conv_templates
+    from io import BytesIO
+    conv = conv_templates['multimodal'].copy()
+    conv.append_message(conv.roles[0], qs)
+    prompt = conv.get_prompt()
+    inputs = tokenizer([prompt])
+    import requests
+    from transformers import StoppingCriteria
+    response = requests.get("https://llava-vl.github.io/static/images/view.jpg")
+    image = Image.open(BytesIO(response.content)).convert('RGB')
+    image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16)
+    image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+    input_ids = torch.as_tensor(inputs.input_ids).cuda() # , dtype=torch.float16).cuda()  ## added dtype
+
+    keywords = ['###']
+    class KeywordsStoppingCriteria(StoppingCriteria):
+        def __init__(self, keywords, tokenizer, input_ids):
+            self.keywords = keywords
+            self.tokenizer = tokenizer
+            self.start_len = None
+            self.input_ids = input_ids
+
+        def __call__(self, output_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+            if self.start_len is None:
+                self.start_len = self.input_ids.shape[1]
+            else:
+                outputs = self.tokenizer.batch_decode(output_ids[:, self.start_len:], skip_special_tokens=True)[0]
+                for keyword in self.keywords:
+                    if keyword in outputs:
+                        return True
+            return False
+        
+    stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
+    
+    print("input_ids", input_ids)
+    with torch.inference_mode():
+        output_ids = model.generate(
+            input_ids,
+            text_input=text_input, 
+            images=image_tensor.unsqueeze(0).half().cuda(),
+            do_sample=True,
+            temperature=0.7,
+            max_new_tokens=1024,
+            stopping_criteria=[stopping_criteria])
+
+    input_token_len = input_ids.shape[1]
+    n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
+    if n_diff_input_output > 0:
+        print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
+    outputs = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
+    print("outputs", outputs)
+
+    while True:
+        cur_len = len(outputs)
+        outputs = outputs.strip()
+        for pattern in ['###', 'Assistant:', 'Response:']:
+            if outputs.startswith(pattern):
+                outputs = outputs[len(pattern):].strip()
+        if len(outputs) == cur_len:
+            break
+
+    try:
+        index = outputs.index(conv.sep)
+    except ValueError:
+        outputs += conv.sep
+        index = outputs.index(conv.sep)
+
+    outputs = outputs[:index].strip()
+    print("\n", outputs)
+    #------------------------------------------------
 
     data_module = make_supervised_data_module(tokenizer=tokenizer,
                                               data_args=data_args)
