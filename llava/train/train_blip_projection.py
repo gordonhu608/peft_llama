@@ -592,79 +592,79 @@ def train():
 
         model = model.to(device=training_args.device)
     #-----------------------------------------------
-    qs = "Provide a brief description of the given image"
-    text_input = "Provide a brief description of the given image"
-    image_token_len = 32 
-    qs = qs + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len + DEFAULT_IM_END_TOKEN
-    from llava.conversation import conv_templates
-    from io import BytesIO
-    conv = conv_templates['multimodal'].copy()
-    conv.append_message(conv.roles[0], qs)
-    prompt = conv.get_prompt()
-    inputs = tokenizer([prompt])
-    import requests
-    from transformers import StoppingCriteria
-    response = requests.get("https://llava-vl.github.io/static/images/view.jpg")
-    image = Image.open(BytesIO(response.content)).convert('RGB')
-    image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16)
-    image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-    input_ids = torch.as_tensor(inputs.input_ids).cuda() # , dtype=torch.float16).cuda()  ## added dtype
+    # qs = "Provide a brief description of the given image"
+    # text_input = "Provide a brief description of the given image"
+    # image_token_len = 32 
+    # qs = qs + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len + DEFAULT_IM_END_TOKEN
+    # from llava.conversation import conv_templates
+    # from io import BytesIO
+    # conv = conv_templates['multimodal'].copy()
+    # conv.append_message(conv.roles[0], qs)
+    # prompt = conv.get_prompt()
+    # inputs = tokenizer([prompt])
+    # import requests
+    # from transformers import StoppingCriteria
+    # response = requests.get("https://llava-vl.github.io/static/images/view.jpg")
+    # image = Image.open(BytesIO(response.content)).convert('RGB')
+    # image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.float16)
+    # image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+    # input_ids = torch.as_tensor(inputs.input_ids).cuda() # , dtype=torch.float16).cuda()  ## added dtype
 
-    keywords = ['###']
-    class KeywordsStoppingCriteria(StoppingCriteria):
-        def __init__(self, keywords, tokenizer, input_ids):
-            self.keywords = keywords
-            self.tokenizer = tokenizer
-            self.start_len = None
-            self.input_ids = input_ids
+    # keywords = ['###']
+    # class KeywordsStoppingCriteria(StoppingCriteria):
+    #     def __init__(self, keywords, tokenizer, input_ids):
+    #         self.keywords = keywords
+    #         self.tokenizer = tokenizer
+    #         self.start_len = None
+    #         self.input_ids = input_ids
 
-        def __call__(self, output_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
-            if self.start_len is None:
-                self.start_len = self.input_ids.shape[1]
-            else:
-                outputs = self.tokenizer.batch_decode(output_ids[:, self.start_len:], skip_special_tokens=True)[0]
-                for keyword in self.keywords:
-                    if keyword in outputs:
-                        return True
-            return False
+    #     def __call__(self, output_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+    #         if self.start_len is None:
+    #             self.start_len = self.input_ids.shape[1]
+    #         else:
+    #             outputs = self.tokenizer.batch_decode(output_ids[:, self.start_len:], skip_special_tokens=True)[0]
+    #             for keyword in self.keywords:
+    #                 if keyword in outputs:
+    #                     return True
+    #         return False
         
-    stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
+    # stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
     
-    print("input_ids", input_ids)
-    with torch.inference_mode():
-        output_ids = model.generate(
-            input_ids,
-            text_input=text_input, 
-            images=image_tensor.unsqueeze(0).half().cuda(),
-            do_sample=True,
-            temperature=0.7,
-            max_new_tokens=1024,
-            stopping_criteria=[stopping_criteria])
+    # print("input_ids", input_ids)
+    # with torch.inference_mode():
+    #     output_ids = model.generate(
+    #         input_ids,
+    #         text_input=text_input, 
+    #         images=image_tensor.unsqueeze(0).half().cuda(),
+    #         do_sample=True,
+    #         temperature=0.7,
+    #         max_new_tokens=1024,
+    #         stopping_criteria=[stopping_criteria])
 
-    input_token_len = input_ids.shape[1]
-    n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
-    if n_diff_input_output > 0:
-        print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
-    outputs = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
-    print("outputs", outputs)
+    # input_token_len = input_ids.shape[1]
+    # n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
+    # if n_diff_input_output > 0:
+    #     print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
+    # outputs = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
+    # print("outputs", outputs)
 
-    while True:
-        cur_len = len(outputs)
-        outputs = outputs.strip()
-        for pattern in ['###', 'Assistant:', 'Response:']:
-            if outputs.startswith(pattern):
-                outputs = outputs[len(pattern):].strip()
-        if len(outputs) == cur_len:
-            break
+    # while True:
+    #     cur_len = len(outputs)
+    #     outputs = outputs.strip()
+    #     for pattern in ['###', 'Assistant:', 'Response:']:
+    #         if outputs.startswith(pattern):
+    #             outputs = outputs[len(pattern):].strip()
+    #     if len(outputs) == cur_len:
+    #         break
 
-    try:
-        index = outputs.index(conv.sep)
-    except ValueError:
-        outputs += conv.sep
-        index = outputs.index(conv.sep)
+    # try:
+    #     index = outputs.index(conv.sep)
+    # except ValueError:
+    #     outputs += conv.sep
+    #     index = outputs.index(conv.sep)
 
-    outputs = outputs[:index].strip()
-    print("\n", outputs)
+    # outputs = outputs[:index].strip()
+    # print("\n", outputs)
     #------------------------------------------------
 
     data_module = make_supervised_data_module(tokenizer=tokenizer,

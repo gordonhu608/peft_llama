@@ -7,7 +7,7 @@ python llava/train/train_blip_projection.py \
     --tune_mm_mlp_adapter True \
     --mm_vision_select_layer -2 \
     --mm_use_im_start_end \
-    --fp16 True \
+    --bf16 True \
     --output_dir ./checkpoints/fp16_pretrain_blip_projection \
     --num_train_epochs 1 \
     --per_device_train_batch_size 16 \

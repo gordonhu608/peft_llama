@@ -32,7 +32,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import add_start_docstrings, add_start_docstrings_to_model_forward, logging, replace_return_docstrings
 from transformers.models.llama.configuration_llama import LlamaConfig
 
-from llava.model.blip2_infer import Blip2Base, disabled_train
+from llava.model.blip2 import Blip2Base, disabled_train
 from .dist_utils import download_cached_file
 from .mask_model import MaskModel
 logger = logging.get_logger(__name__)
@@ -736,14 +736,14 @@ class LlamaModel(LlamaPreTrainedModel):
                     #print("text_Qformer", text_Qformer.input_ids.dtype)
                     # print(text_Qformer.attention_mask)
                     query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
+                    
                     #hack hardcode 
                     print("query_atts", query_atts, query_atts.shape)
                     print("text_Qformer.attention_mask", text_Qformer.attention_mask, text_Qformer.attention_mask.shape)
                     Qformer_atts = torch.cat([query_atts, text_Qformer.attention_mask],dim=1)
                     print("text_Qformer.input_ids", text_Qformer.input_ids)
-                    #print("tokenizer pad token id", self.tokenizer.pad_token_id)
-                    #print("image embed dtype", image_embeds.dtype)
                     image_embeds = image_embeds.to(dtype=torch.bfloat16) #(dtype=torch.float32)
+                    
                     query_output = self.Qformer.bert(
                         text_Qformer.input_ids, 
                         attention_mask=Qformer_atts,

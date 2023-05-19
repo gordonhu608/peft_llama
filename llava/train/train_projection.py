@@ -422,6 +422,8 @@ def train():
     if model_args.vision_tower is not None:
         #model.config.mm_vision_tower = model_args.vision_tower
 
+            
+        #todo cast Qformer is bfloat16 when using blip2 + seg 
         from transformers import CLIPVisionModel, CLIPImageProcessor
         dtype = torch.float32
         if training_args.fp16:
@@ -487,9 +489,7 @@ def train():
         for layer in Qformer.bert.encoder.layer:
             layer.output = None
             layer.intermediate = None
-        model.model.query_tokens = query_tokens.load_state_dict(q_former_state_dict['query_tokens']).to(device=device)
-        
-        model.model.query_tokens = torch.nn.Parameter(torch.FloatTensor(query_tokens).to(device=device))
+        model.model.query_tokens = query_tokens.load_state_dict(q_former_state_dict['query_tokens']).to(device=device) 
 
         model.model.Qformer = Qformer.to(device)
         # model.config.use_mm_proj = True

@@ -183,7 +183,7 @@ class BertSelfAttention(nn.Module):
         is_cross_attention = encoder_hidden_states is not None
 
         if is_cross_attention:
-            print("dtype of encoder_hidden states", encoder_hidden_states.dtype)
+           # print("dtype of encoder_hidden states", encoder_hidden_states.dtype)
             key_layer = self.transpose_for_scores(self.key(encoder_hidden_states))
             value_layer = self.transpose_for_scores(self.value(encoder_hidden_states))
             attention_mask = encoder_attention_mask

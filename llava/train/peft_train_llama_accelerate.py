@@ -64,7 +64,8 @@ class ModelArguments:
     mm_vision_select_layer: Optional[int] = field(default=-1)   # default to the last layer
     pretrain_mm_mlp_adapter: Optional[str] = field(default=None)
     mm_use_im_start_end: bool = field(default=False)
-
+    maskmodel: bool = field(default=False)
+    qformer_text_input: bool = field(default=True) 
 
 @dataclass
 class DataArguments:
@@ -221,6 +222,17 @@ def preprocess(
     4. Make a deepcopy as the target. Mask human words with IGNORE_INDEX.
     """
     # add end signal and concatenate together
+    
+    #hack q_former text input 
+    
+    def strip_word_from_string(sentence, word):
+        if sentence.startswith(word):
+            sentence = sentence[len(word):].lstrip()
+        if sentence.endswith(word):
+            sentence = sentence[:-len(word)].rstrip()
+        return sentence
+
+    qformer_text_input = []
     conversations = []
     for source in sources:
         header = f"{conversation_lib.default_conversation.system}\n\n"
@@ -231,12 +243,14 @@ def preprocess(
     input_ids = conversations_tokenized["input_ids"]
     targets = copy.deepcopy(input_ids)
     for target, source in zip(targets, sources):
+        temp = "".join([strip_word_from_string(s['value'], '<image>') for s in source if s["from"] == "human"])
+        qformer_text_input.append(temp)
         tokenized_lens = _tokenize_fn([header] + [s["value"] for s in source],
                                       tokenizer)["input_ids_lens"]
         speakers = [sentence["from"] for sentence in source]
         _mask_targets(target, tokenized_lens, speakers)
-
-    return dict(input_ids=input_ids, labels=targets)
+    #print("check qformer text input length = 1", len(qformer_text_input))
+    return dict(input_ids=input_ids, labels=targets, qformer_text_input=qformer_text_input)
 
 
 class SupervisedDataset(Dataset):
@@ -309,8 +323,8 @@ class LazySupervisedDataset(Dataset):
             self.tokenizer)
         if isinstance(i, int):
             data_dict = dict(input_ids=data_dict["input_ids"][0],
-                             labels=data_dict["labels"][0])
-
+                             labels=data_dict["labels"][0],
+                             qformer_text_input=data_dict["qformer_text_input"][0])
         # image exist in the data
         if 'image' in self.list_data_dict[i]:
             data_dict['image'] = image
@@ -330,6 +344,7 @@ class DataCollatorForSupervisedDataset(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         input_ids, labels = tuple([instance[key] for instance in instances]
                                   for key in ("input_ids", "labels"))
+        text_input = [instance['qformer_text_input'] for instance in instances]
         input_ids = torch.nn.utils.rnn.pad_sequence(
             input_ids,
             batch_first=True,
@@ -341,6 +356,7 @@ class DataCollatorForSupervisedDataset(object):
             input_ids=input_ids,
             labels=labels,
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+            text_input=text_input,
         )
 
         if 'image' in instances[0]:
@@ -405,18 +421,23 @@ def train():
         padding_side="right",
         use_fast=False,
     )
+    assert tokenizer.pad_token == DEFAULT_PAD_TOKEN
     if tokenizer.pad_token is None:
         smart_tokenizer_and_embedding_resize(
             special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
             tokenizer=tokenizer,
             model=model,
         )
-    if "llama" in model_args.model_name_or_path:
-        tokenizer.add_special_tokens({
-            "eos_token": DEFAULT_EOS_TOKEN,
-            "bos_token": DEFAULT_BOS_TOKEN,
-            "unk_token": DEFAULT_UNK_TOKEN,
-        })
+    
+    assert tokenizer.eos_token == DEFAULT_EOS_TOKEN
+    assert tokenizer.bos_token == DEFAULT_BOS_TOKEN
+    assert tokenizer.unk_token == DEFAULT_UNK_TOKEN
+    # if "llama" in model_args.model_name_or_path:
+    #     tokenizer.add_special_tokens({
+    #         "eos_token": DEFAULT_EOS_TOKEN,
+    #         "bos_token": DEFAULT_BOS_TOKEN,
+    #         "unk_token": DEFAULT_UNK_TOKEN,
+    #     })
     if model_args.vision_tower is not None:
         #model.config.mm_vision_tower = model_args.vision_tower
 
@@ -434,20 +455,20 @@ def train():
         vision_tower, _ =   Blip2Base.init_vision_encoder(
             model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16"
         )
-        for name, param in vision_tower.named_parameters():
-            param.requires_grad = False
-        vision_tower.eval()
-        vision_tower.train = disabled_train
-        for name, param in model.model.ln_vision.named_parameters():
-            param.requires_grad = False
-        model.model.ln_vision.eval()
-        model.model.ln_vision.train = disabled_train
-        print("freeze vision encoder") # logging 
-        vision_tower.requires_grad_(False)
+        # for name, param in vision_tower.named_parameters():
+        #     param.requires_grad = False
+        # vision_tower.eval()
+        # vision_tower.train = disabled_train
+        # for name, param in model.model.ln_vision.named_parameters():
+        #     param.requires_grad = False
+        # model.model.ln_vision.eval()
+        # model.model.ln_vision.train = disabled_train
+        # print("freeze vision encoder") # logging 
+        # vision_tower.requires_grad_(False)
         
-        vision_tower.to(dtype=dtype) #, device=model.model.visual_encoder.device)
-        model.model.visual_encoder = vision_tower    
-        print("\nLoading the pretrained vision encoder")
+        # vision_tower.to(dtype=dtype) #, device=model.model.visual_encoder.device)
+        # model.model.visual_encoder = vision_tower    
+        # print("\nLoading the pretrained vision encoder")
             
         image_processor = CLIPImageProcessor.from_pretrained(model_args.vision_tower)
 
@@ -457,66 +478,69 @@ def train():
         data_args.image_token_len = num_patches
         data_args.image_processor = image_processor
         data_args.is_multimodal = True
-
-        q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
-        cached_file = download_cached_file(
-                q_former_model, check_hash=False, progress=True
-            )
-        q_former_checkpoint = torch.load(cached_file, map_location="cpu")
-        q_former_state_dict = q_former_checkpoint["model"]
-        msg = model.model.Qformer.load_state_dict(q_former_state_dict, strict=False)
-        #logger.info("Missing keys {}".format(msg.missing_keys))
-        logging.info("load checkpoint Qformer from %s" % q_former_model)
-        print("\nLoaded trainable pretrained Qformer weights")
-
+        #--------------------------------------
+        # q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
+        # cached_file = download_cached_file(
+        #         q_former_model, check_hash=False, progress=True
+        #     )
+        # q_former_checkpoint = torch.load(cached_file, map_location="cpu")
+        # q_former_state_dict = q_former_checkpoint["model"]
+        # msg = model.model.Qformer.load_state_dict(q_former_state_dict, strict=False)
+        # #logger.info("Missing keys {}".format(msg.missing_keys))
+        # logging.info("load checkpoint Qformer from %s" % q_former_model)
+        # print("\nLoaded trainable pretrained Qformer weights")
+        #--------------------------------------
         # model.config.use_mm_proj = True
         # model.config.mm_hidden_size = vision_config.hidden_size
         # model.config.mm_vision_select_layer = model_args.mm_vision_select_layer
         # if not hasattr(model.model, 'mm_projector'):
         #     mm_projector = nn.Linear(vision_config.hidden_size, model.config.hidden_size)
         # else:
-        mm_projector = model.model.llama_proj
+        #--------------------------------------
+        # mm_projector = model.model.llama_proj
 
-        if model_args.pretrain_mm_mlp_adapter is not None:
-            mm_projector_weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')['model']
-            mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
+        # if model_args.pretrain_mm_mlp_adapter is not None:
+        #     mm_projector_weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')['model']
+        #     mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
 
-        model.model.llama_proj = mm_projector
-        print("\nLoaded pretrained mm_projector")
+        # model.model.llama_proj = mm_projector
+        # print("\nLoaded pretrained mm_projector")
+        #--------------------------------------
         # model.config.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
         # if model_args.tune_mm_mlp_adapter:
         #     model.requires_grad_(False)
         #     for p in mm_projector.parameters():
         #         p.requires_grad = True
 
-        
+        print("model_args.mm_use_im_start_end: ", model_args.mm_use_im_start_end)
         model.config.mm_use_im_start_end = model_args.mm_use_im_start_end
         data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
-        tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
+        #tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
+        print("tokenizer vocab size: ", len(tokenizer))
         vision_config.use_im_start_end = model_args.mm_use_im_start_end
         if model_args.mm_use_im_start_end:
-            num_new_tokens = tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
-            model.resize_token_embeddings(len(tokenizer))
+            #num_new_tokens = tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+            #model.resize_token_embeddings(len(tokenizer))
             vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
+            num_new_tokens = 0 
+            # if num_new_tokens > 0:
+            #     input_embeddings = model.get_input_embeddings().weight.data
+            #     output_embeddings = model.get_output_embeddings().weight.data
 
-            if num_new_tokens > 0:
-                input_embeddings = model.get_input_embeddings().weight.data
-                output_embeddings = model.get_output_embeddings().weight.data
+            #     input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(
+            #         dim=0, keepdim=True)
+            #     output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(
+            #         dim=0, keepdim=True)
 
-                input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(
-                    dim=0, keepdim=True)
-                output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(
-                    dim=0, keepdim=True)
+            #     input_embeddings[-num_new_tokens:] = input_embeddings_avg
+            #     output_embeddings[-num_new_tokens:] = output_embeddings_avg
 
-                input_embeddings[-num_new_tokens:] = input_embeddings_avg
-                output_embeddings[-num_new_tokens:] = output_embeddings_avg
-
-            if model_args.tune_mm_mlp_adapter:
-                model.model.orig_embeds_params = [model.get_input_embeddings().weight.data.clone().to(device=model.model.llama_proj.device)] # training_args.device
-                for p in model.get_input_embeddings().parameters():
-                    p.requires_grad = True
-                for p in model.get_output_embeddings().parameters():
-                    p.requires_grad = False
+            # if model_args.tune_mm_mlp_adapter:
+            #     model.model.orig_embeds_params = [model.get_input_embeddings().weight.data.clone().to(device=training_args.device)] # training_args.device
+            #     for p in model.get_input_embeddings().parameters():
+            #         p.requires_grad = True
+            #     for p in model.get_output_embeddings().parameters():
+            #         p.requires_grad = False
 
             # if model_args.pretrain_mm_mlp_adapter:
             #     mm_projector_weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')
@@ -543,20 +567,33 @@ def train():
     #         output.requires_grad_(True)
 
     #     model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+    for param in model.parameters():
+        # freeze base model's layers
+        param.requires_grad = False
+    
+    model.enable_input_require_grads()
     
     config = LoraConfig(
-        r= 16, #8, #lora_r,
+        r= 8, #lora_r, #16
         lora_alpha=32, #lora_alpha,
-        target_modules=  ['q_proj','k_proj','v_proj','o_proj'], # ["q_proj", "v_proj", ], # lora_target_modules,
-        lora_dropout=0.05, #lora_dropout,
+        target_modules=  ["q_proj", "v_proj"], #['q_proj','k_proj','v_proj','o_proj'], # , # lora_target_modules,
+        lora_dropout=0.05,  
         bias="none",
         task_type="CAUSAL_LM",
-        modules_to_save=['Qformer', 'llama_proj', 'ln_vision', 'query_tokens']
+        #modules_to_save=['Qformer', 'llama_proj', 'query_tokens'] #hack 
     )
     
     model = get_peft_model(model, config)
 
     model.print_trainable_parameters() 
+    
+    if training_args.bf16:
+        print("convert model to bf16")
+        model = model.bfloat16()
+    else:
+        model = model.float()
+    
+    model.train()
 
     # old_state_dict = model.state_dict
     # model.state_dict = (
@@ -584,7 +621,7 @@ def train():
     safe_save_model_for_hf_trainer(trainer=trainer,
                                    output_dir=training_args.output_dir)
 
-    model.save_pretrained('save_pretrained/may03')
+    model.save_pretrained('save_pretrained/stage2_only_llm_blip_instruct')
 
 if __name__ == "__main__":
     print("This is from peft_llama script")

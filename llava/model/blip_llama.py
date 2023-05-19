@@ -689,7 +689,13 @@ class LlamaModel(LlamaPreTrainedModel):
                         )
                         image_features.append(image_feature)
                 else:
-                    image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) #.unsqueeze(0)
+                    try: 
+                        image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) 
+                    except Exception as e:
+                        print("Autocast for differnt precision")
+                        with torch.cuda.amp.autocast():
+                            image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) 
+                    #image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) #.unsqueeze(0)
                     # print("torch.isfinite(image_embed).all(): {}, min. {:.5f}, max. {:.5f}".format(torch.isfinite(image_embeds).all(), image_embeds.min(), image_embeds.max()))
                     # sys.exit(1)
                     # query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)

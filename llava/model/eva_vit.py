@@ -286,8 +286,16 @@ class VisionTransformer(nn.Module):
 #         self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
         if self.pos_embed is not None:
-            trunc_normal_(self.pos_embed, std=.02)
-        trunc_normal_(self.cls_token, std=.02)
+            if self.pos_embed.dtype == torch.float32:
+                trunc_normal_(self.pos_embed, std=.02)
+            else:
+                origin_type = self.pos_embed.dtype
+                trunc_normal_(self.pos_embed.to(torch.float32), std=.02).to(dtype=origin_type)   
+        if self.cls_token.dtype == torch.float32:
+            trunc_normal_(self.cls_token, std=.02)
+        else:
+            origin_type = self.cls_token.dtype
+            trunc_normal_(self.cls_token.to(torch.float32), std=.02).to(dtype=origin_type)
         # trunc_normal_(self.mask_token, std=.02)
 #         if isinstance(self.head, nn.Linear):
 #             trunc_normal_(self.head.weight, std=.02)
@@ -307,7 +315,13 @@ class VisionTransformer(nn.Module):
 
     def _init_weights(self, m):
         if isinstance(m, nn.Linear):
-            trunc_normal_(m.weight, std=.02)
+            if m.weight.dtype == torch.float32:
+                trunc_normal_(m.weight, std=.02)
+            else:
+                #print("orginal dtype before trunc_normal_", m.weight.dtype)
+                origin_type = m.weight.dtype
+                trunc_normal_(m.weight.to(torch.float32), std=.02).to(origin_type)
+                
             if isinstance(m, nn.Linear) and m.bias is not None:
                 nn.init.constant_(m.bias, 0)
         elif isinstance(m, nn.LayerNorm):

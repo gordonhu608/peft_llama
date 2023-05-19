@@ -6,7 +6,7 @@ from llava.conversation import conv_templates
 from llava.utils import disable_torch_init
 from transformers import CLIPVisionModel, CLIPImageProcessor, StoppingCriteria
 import llava.model.blip_llama_infer as blip_llama
-from llava.model.blip2_infer import Blip2Base
+from llava.model.blip2 import Blip2Base
 from llava.model.dist_utils import download_cached_file
 from PIL import Image
 
@@ -61,7 +61,7 @@ def eval_model(args):
     #     model = modeling_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
     #     image_processor = CLIPImageProcessor.from_pretrained(model.config.mm_vision_tower, torch_dtype=torch.float16)
 
-    #     mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
+    #mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
     #     tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
     #     if mm_use_im_start_end:
     #         tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
@@ -76,7 +76,7 @@ def eval_model(args):
     #     image_token_len = (vision_config.image_size // vision_config.patch_size) ** 2
     # else:
         # in case of using a pretrained model with only a MLP projector weights
-    model = blip_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.float16).cuda()
+    model = blip_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).cuda()
 
     #model.model.load_state_dict(torch.load(lora_weight, map_location='cpu'))
 
@@ -88,21 +88,22 @@ def eval_model(args):
         #     model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16"
         # )
     #CLIPVisionModel.from_pretrained(args.vision_tower, torch_dtype=torch.float16).cuda()
-    image_processor = CLIPImageProcessor.from_pretrained(args.vision_tower, torch_dtype=torch.float16)
+    image_processor = CLIPImageProcessor.from_pretrained(args.vision_tower, torch_dtype=torch.bfloat16)
 
-    mm_use_im_start_end =  False #getattr(model.config, "mm_use_im_start_end", False)
-    tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
+    mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
+    assert len(tokenizer) == 32004
+    #tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
     #todo add pad token if for batched inference 
     
-    model.model.visual_encoder = vision_tower
-    if mm_use_im_start_end:
-        tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+    #model.model.visual_encoder = vision_tower
+    # if mm_use_im_start_end:
+    #     tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
 
     vision_config = vision_tower.config
     vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
     vision_config.use_im_start_end = mm_use_im_start_end
     if mm_use_im_start_end:
-        print("\n not supported yet \n")
+        print("using im start end")
         vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
 
     image_token_len = 32  #(vision_config.image_size // vision_config.patch_size) ** 2
@@ -115,14 +116,14 @@ def eval_model(args):
     # model.model.mm_projector = mm_projector.cuda().half()
     # model.model.vision_tower = [vision_tower]
     
-    q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
-    cached_file = download_cached_file(
-            q_former_model, check_hash=False, progress=True
-        )
-    q_former_checkpoint = torch.load(cached_file, map_location="cpu")
-    q_former_state_dict = q_former_checkpoint["model"]
-    msg = model.model.Qformer.load_state_dict(q_former_state_dict, strict=False)
-    print("\nLoaded trainable pretrained Qformer weights")
+    # q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
+    # cached_file = download_cached_file(
+    #         q_former_model, check_hash=False, progress=True
+    #     )
+    # q_former_checkpoint = torch.load(cached_file, map_location="cpu")
+    # q_former_state_dict = q_former_checkpoint["model"]
+    # msg = model.model.Qformer.load_state_dict(q_former_state_dict, strict=False)
+    # print("\nLoaded trainable pretrained Qformer weights")
     
     # mm_projector = model.model.llama_proj
     # mm_projector_weights = torch.load("data/minigpt_proj_7b.pth", map_location='cpu')['model']
@@ -132,6 +133,7 @@ def eval_model(args):
     # print("\nLoaded pretrained mm_projector")
     
     qs = args.query
+    text_input = args.query
     if mm_use_im_start_end:
         qs = qs + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len + DEFAULT_IM_END_TOKEN
     else:
@@ -153,7 +155,7 @@ def eval_model(args):
     model = PeftModel.from_pretrained(
             model,
             lora_weight,
-            torch_dtype=torch.float16,
+            torch_dtype=torch.bfloat16,
         )
     model.to('cuda')
     model.eval()
@@ -167,7 +169,8 @@ def eval_model(args):
     with torch.inference_mode():
         output_ids = model.generate(
             input_ids=input_ids,
-            images=image_tensor.unsqueeze(0).half().cuda(),
+            text_input=text_input,
+            images=image_tensor.unsqueeze(0).cuda(),
             do_sample=True,
             temperature=0.7,
             max_new_tokens=1024,

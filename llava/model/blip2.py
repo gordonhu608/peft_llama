@@ -24,7 +24,6 @@ from .Qformer import BertConfig, BertLMHeadModel
 from .eva_vit import create_eva_vit_g
 from transformers import BertTokenizer
 
-
 class Blip2Base(BaseModel):
     @classmethod
     def init_tokenizer(cls, truncation_side="right"):
