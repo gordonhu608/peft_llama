@@ -128,8 +128,12 @@ class Sam(nn.Module):
             #         "low_res_logits": low_res_masks,
             #     }
             # )
-        #return outputs
-        return low_res_masks, iou_predictions
+            masks = low_res_masks.squeeze(1)
+            outputs.append(masks)
+        
+        outputs = torch.stack(outputs, dim=0)
+        
+        return outputs
 
     def postprocess_masks(
         self,

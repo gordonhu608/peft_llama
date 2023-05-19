@@ -25,58 +25,79 @@ from llava.model.segment_anything.utils.amg import (
     uncrop_masks,
     uncrop_points,
 )
- 
+from llava.model.segment_anything.utils.transforms import ResizeLongestSide
+
 class MaskModel(nn.Module):
     def __init__(self):
         super().__init__()
         self.sam = build_sam_vit_l("/home/shawn/nvme/vl_research/peft_llama/data/sam_vit_l_0b3195.pth")
         self.point_grids =  build_all_layer_point_grids( 16, 0, 1)
         self.points_per_batch = 256 # 32 
-        self.predictor = SamPredictor(self.sam)
+        self.transform =  ResizeLongestSide(self.sam.image_encoder.img_size)
+        self.device = None
+        #self.predictor = SamPredictor(self.sam)
         
-    def forward(self, image):
+    def forward(self, images):
+        #todo support batched forward
         #image tensor back to pil image 
-        tensor = image
-        mean = torch.tensor([0.48145466, 0.4578275, 0.40821073], dtype = torch.float32, device=tensor.device)
-        std = torch.tensor([0.26862954, 0.26130258, 0.27577711], dtype = torch.float32, device=tensor.device)
-        tensor *= std[:, None, None]
-        tensor += mean[:, None, None]
-        image = tensor.cpu().numpy().transpose(1, 2, 0)
-        image = np.uint8(image * 255)
+        bs = images.shape[0]
+        self.device = images.device
+        #self.point_grids = self.point_grids.unsqueeze(0).repeat(bs, 1, 1, 1) 
+        processed = []
+        for image in images:
+            tensor = image
+            mean = torch.tensor([0.48145466, 0.4578275, 0.40821073], dtype = torch.float32, device=tensor.device)
+            std = torch.tensor([0.26862954, 0.26130258, 0.27577711], dtype = torch.float32, device=tensor.device)
+            tensor *= std[:, None, None]
+            tensor += mean[:, None, None]
+            image = tensor.cpu().numpy().transpose(1, 2, 0)
+            image = np.uint8(image * 255)
+            processed.append(image)
+      
+        # print("processed shape", images.shape)  # 8, 224, 224, 3
+        #print ("points shape", self.point_grids[0].shape) # 256, 2
         
-        orig_size = image.shape[:2]
-        crop_boxes, layer_idxs = generate_crop_boxes(
-            orig_size, 0, 512/1500
-        )
-        
-        for crop_box, layer_idx in zip(crop_boxes, layer_idxs):
-            x0, y0, x1, y1 = crop_box # 0, 0, 224, 224
-            cropped_im = image[y0:y1, x0:x1, :] # 224, 224, 3
-            cropped_im_size = cropped_im.shape[:2]
-            self.predictor.set_image(cropped_im)
-
-            # Get points for this crop
-            points_scale = np.array(cropped_im_size)[None, ::-1] # [[224, 224]]
-            points_for_image = self.point_grids[layer_idx] * points_scale
+        images_torch = []
+        for image in processed:
+            input_image = self.transform.apply_image(image)
+            input_image_torch = torch.as_tensor(input_image, device=self.device)
+            input_image_torch = input_image_torch.permute(2, 0, 1).contiguous()
+            images_torch.append(input_image_torch)
             
-            point_queries = [] 
-            # Generate masks for this crop in batches
-            for (points,) in batch_iterator(self.points_per_batch, points_for_image):
-                #batch_data = self._process_batch(points, cropped_im_size, crop_box, orig_size)
-                transformed_points = self.predictor.transform.apply_coords(points, cropped_im_size)
-                in_points = torch.as_tensor(transformed_points, device=self.predictor.device)
-                in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
-                masks, iou_preds = self.predictor.predict_torch(
-                    in_points[:, None, :],
-                    in_labels[:, None],
-                    multimask_output=True,
-                    return_logits=True,
-                )
-                point_queries.append(masks)
-            point_queries = torch.cat(point_queries, dim=0)    # 256,1, 256 
-            self.predictor.reset_image()
+        orig_size = image.shape[:2]
+        
+        points_scale = [[224, 224]] #np.array(cropped_im_size)[None, ::-1] 
+        points_for_image = self.point_grids[0] * points_scale
 
-        return point_queries.squeeze(1)
+        transformed_points = self.transform.apply_coords(points_for_image, orig_size)
+        
+        in_points = torch.as_tensor(transformed_points, device=self.device)
+        in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
+        
+        #print("in_points shape", in_points.shape) # 256, 2
+       # print("in_labels shape", in_labels.shape) # 256
+        
+        batched_input = []
+        for i in range(bs):
+            batched_input.append({
+                'image': images_torch[i],
+                'original_size': orig_size,
+                'point_coords': in_points[:, None, :],
+                'point_labels': in_labels[:, None],
+            })
+        
+        out = self.sam(batched_input, multimask_output=True)
+        # masks, iou_preds = self.predictor.predict_torch(
+        #     in_points[:, None, :],
+        #     in_labels[:, None],
+        #     multimask_output=True,
+        #     return_logits=True,
+        # )
+        #print("out shape", out.shape)
+        # point_queries.append(masks)
+        # point_queries = torch.cat(point_queries, dim=0)    # 256,1, 256 
+
+        return out #point_queries.squeeze(1)
    
    
    

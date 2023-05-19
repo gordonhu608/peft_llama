@@ -744,11 +744,10 @@ class LlamaModel(LlamaPreTrainedModel):
                 image_features = self.llama_proj(query_output.last_hidden_state[:,:query_tokens.size(1),:])
                 if self.maskmodel is not None:
                     #print("are you sure using maskmodel?")
-                    mask_features = []
-                    for image in images:
-                        mask_feature = self.maskmodel(image)
-                        mask_features.append(mask_feature)
-                    mask_features = self.mask_proj(torch.stack(mask_features, dim=0))
+                    #mask_features = []
+                    with torch.no_grad():
+                        mask_features = self.maskmodel(images)
+                    mask_features = self.mask_proj(mask_features)
                     #image_features = torch.cat((image_features, mask_feature), dim=1)
             
                      
@@ -812,7 +811,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     new_input_embeds.append(cur_new_input_embeds)
                     
             inputs_embeds = torch.stack(new_input_embeds, dim=0)
-            print("inputs_embeds", inputs_embeds.shape)
+           # print("inputs_embeds", inputs_embeds.shape)
         # embed positions
         if attention_mask is None:
             attention_mask = torch.ones(
