@@ -55,7 +55,7 @@ if __name__ == '__main__':
     parser.add_argument('-q', '--question', default="/home/shawn/nvme/vl_research/peft_llama/data/OwlEval/questions.jsonl")
     # parser.add_argument('-a', '--answer')
     parser.add_argument('-a', '--answer-list', nargs='+', default=["/home/shawn/nvme/vl_research/peft_llama/data/OwlEval/answer/mPLUG_Owl_7b_answer.jsonl", \
-                                                                    "/home/shawn/nvme/vl_research/peft_llama/data/OwlEval/answer/llava_13b_answer.jsonl"])
+                                                                    "data/OwlEval/answer/blip_insturct_1/10_finetune.jsonl"])
     parser.add_argument('-o', '--output', required=True)
     parser.add_argument('--max-tokens', type=int, default=1024, help='maximum number of tokens produced in the output')
     args = parser.parse_args()

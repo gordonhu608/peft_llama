@@ -51,9 +51,14 @@ DEFAULT_EOS_TOKEN = "</s>"
 DEFAULT_BOS_TOKEN = "</s>"
 DEFAULT_UNK_TOKEN = "<unk>"
 DEFAULT_IMAGE_TOKEN = "<image>"
+
 DEFAULT_IMAGE_PATCH_TOKEN = "<im_patch>"
 DEFAULT_IM_START_TOKEN = "<im_start>"
 DEFAULT_IM_END_TOKEN = "<im_end>"
+
+DEFAULT_MASK_PATCH_TOKEN = "<mask_patch>"
+DEFAULT_MASK_START_TOKEN = "<mask_start>"
+DEFAULT_MASK_END_TOKEN = "<mask_end>"
 
 
 @dataclass
@@ -65,8 +70,8 @@ class ModelArguments:
     mm_vision_select_layer: Optional[int] = field(default=-1)   # default to the last layer
     pretrain_mm_mlp_adapter: Optional[str] = field(default=None)
     mm_use_im_start_end: bool = field(default=False)
-    maskmodel: bool = field(default=False)
-
+    maskmodel: bool = field(default=True)
+    qformer_text_input: bool = field(default=True) 
 
 @dataclass
 class DataArguments:
@@ -75,6 +80,7 @@ class DataArguments:
     lazy_preprocess: bool = False
     is_multimodal: bool = False
     image_token_len: int = 0
+    mask_token_len: int = 0
     image_folder: Optional[str] = field(default=None)
     image_aspect_ratio: str = 'square'
 
@@ -194,6 +200,7 @@ def preprocess_multimodal(
     sources: Sequence[str],
     multimodal_cfg: dict,
     cur_token_len: int,
+    cur_mask_len: int,
 ) -> Dict:
     is_multimodal = multimodal_cfg['is_multimodal']
     # image_token_len = multimodal_cfg['image_token_len']
@@ -203,12 +210,17 @@ def preprocess_multimodal(
 
     for source in sources:
         for sentence in source:
-            replace_token = DEFAULT_IMAGE_PATCH_TOKEN * image_token_len
+            replace_token = DEFAULT_IMAGE_PATCH_TOKEN * image_token_len 
+            replace_mask_token = DEFAULT_MASK_PATCH_TOKEN * cur_mask_len
             if multimodal_cfg['use_im_start_end']:
                 replace_token = DEFAULT_IM_START_TOKEN + replace_token + DEFAULT_IM_END_TOKEN
+                if replace_mask_token != '':
+                    replace_mask_token = DEFAULT_MASK_START_TOKEN + replace_mask_token + DEFAULT_MASK_END_TOKEN
+                    replace_token = replace_token + replace_mask_token
             sentence["value"] = sentence["value"].replace(DEFAULT_IMAGE_TOKEN, replace_token)
 
     return sources
+
 
 
 def preprocess(
@@ -223,6 +235,17 @@ def preprocess(
     4. Make a deepcopy as the target. Mask human words with IGNORE_INDEX.
     """
     # add end signal and concatenate together
+    
+    #hack q_former text input 
+    
+    def strip_word_from_string(sentence, word):
+        if sentence.startswith(word):
+            sentence = sentence[len(word):].lstrip()
+        if sentence.endswith(word):
+            sentence = sentence[:-len(word)].rstrip()
+        return sentence
+
+    qformer_text_input = []
     conversations = []
     for source in sources:
         header = f"{conversation_lib.default_conversation.system}\n\n"
@@ -233,12 +256,14 @@ def preprocess(
     input_ids = conversations_tokenized["input_ids"]
     targets = copy.deepcopy(input_ids)
     for target, source in zip(targets, sources):
+        temp = "".join([strip_word_from_string(s['value'], '<image>') for s in source if s["from"] == "human"])
+        qformer_text_input.append(temp)
         tokenized_lens = _tokenize_fn([header] + [s["value"] for s in source],
                                       tokenizer)["input_ids_lens"]
         speakers = [sentence["from"] for sentence in source]
         _mask_targets(target, tokenized_lens, speakers)
-
-    return dict(input_ids=input_ids, labels=targets)
+    #print("check qformer text input length = 1", len(qformer_text_input))
+    return dict(input_ids=input_ids, labels=targets, qformer_text_input=qformer_text_input)
 
 
 class SupervisedDataset(Dataset):
@@ -300,10 +325,11 @@ class LazySupervisedDataset(Dataset):
                 image = processor.preprocess(image, return_tensors='pt', do_center_crop=False, size={"shortest_edge": shortest_edge})['pixel_values'][0]
             else:
                 image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            cur_token_len = 32 + 256 # (image.shape[1]//14) * (image.shape[2]//14)   # FIXME: 14 is hardcoded patch size
+            cur_token_len = 32 
+            cur_mask_len =  256 # (image.shape[1]//14) * (image.shape[2]//14)   # FIXME: 14 is hardcoded patch size
             sources = preprocess_multimodal(
                 copy.deepcopy([e["conversations"] for e in sources]),
-                self.multimodal_cfg, cur_token_len)
+                self.multimodal_cfg, cur_token_len, cur_mask_len)
         else:
             sources = copy.deepcopy([e["conversations"] for e in sources])
         data_dict = preprocess(
@@ -311,7 +337,8 @@ class LazySupervisedDataset(Dataset):
             self.tokenizer)
         if isinstance(i, int):
             data_dict = dict(input_ids=data_dict["input_ids"][0],
-                             labels=data_dict["labels"][0])
+                             labels=data_dict["labels"][0],
+                            qformer_text_input=data_dict["qformer_text_input"][0])
 
         # image exist in the data
         if 'image' in self.list_data_dict[i]:
@@ -332,6 +359,7 @@ class DataCollatorForSupervisedDataset(object):
     def __call__(self, instances: Sequence[Dict]) -> Dict[str, torch.Tensor]:
         input_ids, labels = tuple([instance[key] for instance in instances]
                                   for key in ("input_ids", "labels"))
+        text_input = [instance['qformer_text_input'] for instance in instances]
         input_ids = torch.nn.utils.rnn.pad_sequence(
             input_ids,
             batch_first=True,
@@ -343,6 +371,7 @@ class DataCollatorForSupervisedDataset(object):
             input_ids=input_ids,
             labels=labels,
             attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+            text_input=text_input,
         )
 
         if 'image' in instances[0]:
@@ -422,13 +451,14 @@ def train():
     if model_args.vision_tower is not None:
         #model.config.mm_vision_tower = model_args.vision_tower
 
-            
+        qformer_tokenizer = Blip2Base.init_tokenizer(truncation_side="left")    
         #todo cast Qformer is bfloat16 when using blip2 + seg 
         from transformers import CLIPVisionModel, CLIPImageProcessor
         dtype = torch.float32
         if training_args.fp16:
             dtype = torch.float16
         if training_args.bf16:
+            print('Using bfloat16')
             dtype = torch.bfloat16
 
         q_former_model = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/BLIP2/blip2_pretrained_flant5xxl.pth"
@@ -460,8 +490,8 @@ def train():
         print("freeze vision encoder") # logging 
         vision_tower.requires_grad_(False)
         
-        vision_tower.to(dtype=dtype, device=next(model.model.visual_encoder.parameters()).device) 
-        ln_vision.to(dtype=dtype, device=next(model.model.visual_encoder.parameters()).device)
+        vision_tower.to(dtype=dtype, device=training_args.device)
+        ln_vision.to(dtype=dtype, device=training_args.device)
         model.model.visual_encoder = vision_tower    
         model.model.ln_vision = ln_vision
         print("\nLoading the pretrained vision encoder")
@@ -471,7 +501,11 @@ def train():
         vision_config = vision_tower.config
         
         num_patches =  32  + 256 #(vision_config.image_size // vision_config.patch_size) ** 2
-        data_args.image_token_len = num_patches
+        if model_args.maskmodel:
+            print("we are using mask model")
+            num_patches = (32, 256)
+        data_args.image_token_len = 32
+        data_args.mask_token_len = 256
         data_args.image_processor = image_processor
         data_args.is_multimodal = True
         
@@ -483,15 +517,21 @@ def train():
         logging.info("load checkpoint Qformer from %s" % q_former_model)
         print("\nLoaded trainable pretrained Qformer weights")
         
+        if not model_args.qformer_text_input:
+            Qformer.bert.embeddings.word_embeddings = None
+            Qformer.bert.embeddings.position_embeddings = None
+            for layer in Qformer.bert.encoder.layer:
+                layer.output = None
+                layer.intermediate = None
+        else:
+            Qformer.resize_token_embeddings(len(qformer_tokenizer))
+        
         Qformer.cls = None
-        Qformer.bert.embeddings.word_embeddings = None
-        Qformer.bert.embeddings.position_embeddings = None
-        for layer in Qformer.bert.encoder.layer:
-            layer.output = None
-            layer.intermediate = None
-        model.model.query_tokens = query_tokens.load_state_dict(q_former_state_dict['query_tokens']).to(device=device) 
-
-        model.model.Qformer = Qformer.to(device)
+        
+        #model.model.query_tokens = query_tokens.load_state_dict(q_former_state_dict['query_tokens']).to(dtype=dtype)
+        model.model.query_tokens = torch.nn.Parameter(q_former_state_dict['query_tokens'].to(dtype=dtype))
+        model.model.Qformer = Qformer.to(dtype=dtype)
+        model.model.tokenizer = qformer_tokenizer
         # model.config.use_mm_proj = True
         # model.config.mm_hidden_size = vision_config.hidden_size
         # model.config.mm_vision_select_layer = model_args.mm_vision_select_layer
@@ -501,7 +541,10 @@ def train():
         mm_projector =  torch.nn.Linear(
             model.model.Qformer.config.hidden_size, model.model.config.hidden_size
         )   #model.model.llama_proj
-        
+        mm_projector_weights = torch.load("data/minigpt_proj_7b.pth", map_location='cpu')['model']
+        mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
+    
+        model.model.llama_proj = mm_projector
         # if model_args.pretrain_mm_mlp_adapter is not None:
         #     mm_projector_weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')['model']
         #     mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
@@ -511,7 +554,6 @@ def train():
         model.model.maskmodel = maskmodel
         model.model.mask_proj = mask_proj
     
-        model.model.llama_proj = mm_projector
         #print("\nLoaded pretrained mm_projector")
         model.config.tune_mm_mlp_adapter = model_args.tune_mm_mlp_adapter
         if model_args.tune_mm_mlp_adapter:
@@ -529,16 +571,22 @@ def train():
             for p in model.model.mask_proj.parameters():
                 p.requires_grad = True
         
-        # model.config.mm_use_im_start_end = model_args.mm_use_im_start_end
-        # data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
+        model.config.mm_use_im_start_end = model_args.mm_use_im_start_end
+        data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
         tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
+        if model_args.maskmodel:
+            tokenizer.add_tokens([DEFAULT_MASK_PATCH_TOKEN], special_tokens=True)
         vision_config.use_im_start_end = model_args.mm_use_im_start_end
         if model_args.mm_use_im_start_end:
-            logging.warning("Don't use im_start_end token")
+            print("ok, we definitly should use im start end tokens")
             num_new_tokens = tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+            if model_args.maskmodel:
+                num_new_tokens = num_new_tokens + tokenizer.add_tokens([DEFAULT_MASK_START_TOKEN, DEFAULT_MASK_END_TOKEN], special_tokens=True)
+                print("num new tokens", num_new_tokens)
             model.resize_token_embeddings(len(tokenizer))
             vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
-
+            if model_args.maskmodel:
+                vision_config.mask_start_token, vision_config.mask_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_MASK_START_TOKEN, DEFAULT_MASK_END_TOKEN])
             if num_new_tokens > 0:
                 input_embeddings = model.get_input_embeddings().weight.data
                 output_embeddings = model.get_output_embeddings().weight.data
@@ -552,7 +600,7 @@ def train():
                 output_embeddings[-num_new_tokens:] = output_embeddings_avg
 
             if model_args.tune_mm_mlp_adapter:
-                model.model.orig_embeds_params = [model.get_input_embeddings().weight.data.clone().to(device=next(model.model.llama_proj.parameters()).device)] # training_args.device
+                model.model.orig_embeds_params = [model.get_input_embeddings().weight.data.clone().to(device=training_args.device)]
                 for p in model.get_input_embeddings().parameters():
                     p.requires_grad = True
                 for p in model.get_output_embeddings().parameters():
@@ -570,9 +618,10 @@ def train():
             #         raise ValueError(f"Unexpected embed_tokens_weight shape. Pretrained: {embed_tokens_weight.shape}. Current: {input_embeddings.shape}. Numer of new tokens: {num_new_tokens}.")
 
         vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
-
+        vision_config.mask_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_MASK_PATCH_TOKEN])[0]
+        
         model.model.visual_encoder.config = vision_config
-
+        model = model.to(device=training_args.device)
 
     data_module = make_supervised_data_module(tokenizer=tokenizer,
                                               data_args=data_args)

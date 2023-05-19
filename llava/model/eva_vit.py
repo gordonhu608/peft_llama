@@ -457,6 +457,9 @@ def create_eva_vit_g(img_size=224,drop_path_rate=0.4,use_checkpoint=False,precis
             self.im_start_token = None
             self.im_end_token = None
             self.im_patch_token = None
+            self.mask_patch_token = None
+            self.mask_start_token = None    
+            self.mask_end_token = None
             
     config = VisionTowerConfig(img_size=img_size)
     model.config = config

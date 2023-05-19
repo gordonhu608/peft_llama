@@ -1,5 +1,5 @@
 WORLD_SIZE=1 CUDA_VISIBLE_DEVICES=0 \
-python llava/train/train_blip_projection.py \
+python llava/train/train_projection.py \
     --model_name_or_path ./data/llama_vicuna_7b \
     --data_path ../chat.json \
     --image_folder ../CC-3M \
@@ -8,14 +8,14 @@ python llava/train/train_blip_projection.py \
     --mm_vision_select_layer -2 \
     --mm_use_im_start_end \
     --bf16 True \
-    --output_dir ./checkpoints/fp16_pretrain_blip_projection \
+    --output_dir ./checkpoints/seg_projection \
     --num_train_epochs 1 \
-    --per_device_train_batch_size 16 \
+    --per_device_train_batch_size 8 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 8 \
+    --gradient_accumulation_steps 16 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
-    --save_steps 2400 \
+    --save_steps 1600 \
     --save_total_limit 1 \
     --learning_rate 2e-3 \
     --weight_decay 0. \
@@ -25,6 +25,5 @@ python llava/train/train_blip_projection.py \
     --model_max_length 2048 \
     --gradient_checkpointing True \
     --lazy_preprocess True \
-    --report_to wandb
-
-    
+    --report_to wandb \
+    --maskmodel True 
