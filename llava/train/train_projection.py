@@ -549,9 +549,11 @@ def train():
         #     mm_projector_weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')['model']
         #     mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
 
-        maskmodel = MaskModel().to(device)
+        maskmodel = MaskModel()
+        maskmodel.eval()
+        maskmodel.train = disabled_train
         mask_proj = nn.Linear(256, model.model.config.hidden_size)          
-        model.model.maskmodel = maskmodel
+        model.model.maskmodel = maskmodel.to(device)
         model.model.mask_proj = mask_proj
     
         #print("\nLoaded pretrained mm_projector")
