@@ -1,7 +1,7 @@
 #!/bin/bash
 model_name="./checkpoints/pretrain_blip_projection_with_text/"
-lora_weight="./save_pretrained/stage2_only_llm_blip_instruct/"
-answers_file="data/OwlEval/answer/blip_insturct_1_10_finetune.jsonl"
+lora_weight="./save_pretrained/stage2_fully_blip_epoch1"
+answers_file="data/OwlEval/answer/blip_epoch1.jsonl"
 
 # Get the last part of the path
 output_file="${answers_file##*/}"

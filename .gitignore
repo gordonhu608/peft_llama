@@ -19,3 +19,5 @@ output
 
 checkpoints
 ckpts*
+
+evalOCR/answers/

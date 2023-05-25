@@ -139,7 +139,7 @@ class MaskDecoder(nn.Module):
         b, c, h, w = src.shape
 
         # Run the transformer
-        hs, src = self.transformer(src, pos_src, tokens)
+        hs, src = self.transformer(src, pos_src, tokens) # hs are queries , src are keys
         iou_token_out = hs[:, 0, :] # 64, 1, 256
         mask_tokens_out = hs[:, 1 : (1 + self.num_mask_tokens), :] # 64,4, 256
 

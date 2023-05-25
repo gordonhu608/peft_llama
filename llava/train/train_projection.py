@@ -322,6 +322,7 @@ class LazySupervisedDataset(Dataset):
                 aspect_ratio = max_hw / min_hw
                 max_len, min_len = 448, 224
                 shortest_edge = int(min(max_len / aspect_ratio, min_len))
+                #Todo chaneg processor 
                 image = processor.preprocess(image, return_tensors='pt', do_center_crop=False, size={"shortest_edge": shortest_edge})['pixel_values'][0]
             else:
                 image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]

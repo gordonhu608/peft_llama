@@ -44,6 +44,8 @@ from llava.model.blip2 import Blip2Base, disabled_train
 import llava.model.blip_llama as modeling_llama
 from llava.model.dist_utils import download_cached_file
 
+from functools import partial
+
 IGNORE_INDEX = -100
 DEFAULT_PAD_TOKEN = "[PAD]"
 DEFAULT_EOS_TOKEN = "</s>"
@@ -408,7 +410,7 @@ def train():
     model = modeling_llama.LlamaForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
-        #device_map=device_map,
+        device_map=device_map,
     )
 
     if model_args.freeze_backbone:
@@ -572,7 +574,6 @@ def train():
         param.requires_grad = False
     
     model.enable_input_require_grads()
-    
     config = LoraConfig(
         r= 8, #lora_r, #16
         lora_alpha=32, #lora_alpha,
@@ -586,6 +587,13 @@ def train():
     model = get_peft_model(model, config)
 
     model.print_trainable_parameters() 
+    
+    #if args.gradient_checkpointing:
+    # def make_inputs_require_grad(module, input, output):
+    #     output.requires_grad_(True)
+    # model.get_input_embeddings().register_forward_hook(make_inputs_require_grad)
+    # model.apply(
+    #     partial(model._set_gradient_checkpointing, value=True))
     
     if training_args.bf16:
         print("convert model to bf16")
@@ -605,7 +613,6 @@ def train():
     # if torch.__version__ >= "2" :
     #     model = torch.compile(model)
 
-
     data_module = make_supervised_data_module(tokenizer=tokenizer,
                                               data_args=data_args)
     trainer = Trainer(model=model,
@@ -621,7 +628,7 @@ def train():
     safe_save_model_for_hf_trainer(trainer=trainer,
                                    output_dir=training_args.output_dir)
 
-    model.save_pretrained('save_pretrained/stage2_only_llm_blip_instruct')
+    model.save_pretrained('save_pretrained/stage2_blip_epoch3')
 
 if __name__ == "__main__":
     print("This is from peft_llama script")

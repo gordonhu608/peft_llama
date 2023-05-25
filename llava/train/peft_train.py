@@ -494,8 +494,14 @@ def train():
         vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
 
     #hack added peft 
-    model = prepare_model_for_int8_training(model)
+    #model = prepare_model_for_int8_training(model)
 
+    for param in model.parameters():
+        # freeze base model's layers
+        param.requires_grad = False
+    
+    model.enable_input_require_grads()
+    
     config = LoraConfig(
         r= 8, #lora_r,
         lora_alpha= 16, #lora_alpha,

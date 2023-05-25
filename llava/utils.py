@@ -4,9 +4,14 @@ import logging.handlers
 import os
 import sys
 
+from PIL import Image
+
+from io import BytesIO
+import torch 
 import requests
 
 from llava.constants import LOGDIR
+from transformers import StoppingCriteria
 
 server_error_msg = "**NETWORK ERROR DUE TO HIGH TRAFFIC. PLEASE REGENERATE OR REFRESH THIS PAGE.**"
 moderation_msg = "YOUR INPUT VIOLATES OUR CONTENT MODERATION GUIDELINES. PLEASE TRY AGAIN."
@@ -124,3 +129,31 @@ def pretty_print_semaphore(semaphore):
     if semaphore is None:
         return "None"
     return f"Semaphore(value={semaphore._value}, locked={semaphore.locked()})"
+
+
+
+class KeywordsStoppingCriteria(StoppingCriteria):
+    def __init__(self, keywords, tokenizer, input_ids):
+        self.keywords = keywords
+        self.tokenizer = tokenizer
+        self.start_len = None
+        self.input_ids = input_ids
+
+    def __call__(self, output_ids: torch.LongTensor, scores: torch.FloatTensor, **kwargs) -> bool:
+        if self.start_len is None:
+            self.start_len = self.input_ids.shape[1]
+        else:
+            outputs = self.tokenizer.batch_decode(output_ids[:, self.start_len:], skip_special_tokens=True)[0]
+            for keyword in self.keywords:
+                if keyword in outputs:
+                    return True
+        return False
+
+
+def load_image(image_file):
+    if image_file.startswith('http') or image_file.startswith('https'):
+        response = requests.get(image_file)
+        image = Image.open(BytesIO(response.content)).convert('RGB')
+    else:
+        image = Image.open(image_file).convert('RGB')
+    return image

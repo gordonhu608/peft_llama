@@ -700,7 +700,7 @@ class LlamaModel(LlamaPreTrainedModel):
                         print("Autocast for differnt precision")
                         with torch.cuda.amp.autocast():
                             image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) 
-                    print("torch.isfinite(image_embed).all(): {}, min. {:.5f}, max. {:.5f}".format(torch.isfinite(image_embeds).all(), image_embeds.min(), image_embeds.max()))
+                    #print("torch.isfinite(image_embed).all(): {}, min. {:.5f}, max. {:.5f}".format(torch.isfinite(image_embeds).all(), image_embeds.min(), image_embeds.max()))
                     #image_embeds = image_embeds.to(dtype=torch.float32)
                     #sys.exit(1)
                     # print("dtype of image_emedds", image_embeds.dtype)
@@ -725,7 +725,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     # print("------------------")
                     # print("using qformer text input")
                     # print("------------------")
-                    print("text_input", text_input)
+                    #print("text_input", text_input)
                     text_Qformer = self.tokenizer( 
                         text_input,
                         padding='longest',
@@ -738,10 +738,10 @@ class LlamaModel(LlamaPreTrainedModel):
                     query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
                     
                     #hack hardcode 
-                    print("query_atts", query_atts, query_atts.shape)
-                    print("text_Qformer.attention_mask", text_Qformer.attention_mask, text_Qformer.attention_mask.shape)
+                   # print("query_atts", query_atts, query_atts.shape)
+                   # print("text_Qformer.attention_mask", text_Qformer.attention_mask, text_Qformer.attention_mask.shape)
                     Qformer_atts = torch.cat([query_atts, text_Qformer.attention_mask],dim=1)
-                    print("text_Qformer.input_ids", text_Qformer.input_ids)
+                   # print("text_Qformer.input_ids", text_Qformer.input_ids)
                     image_embeds = image_embeds.to(dtype=torch.bfloat16) #(dtype=torch.float32)
                     
                     query_output = self.Qformer.bert(

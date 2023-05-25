@@ -483,8 +483,9 @@ class LlamaModel(LlamaPreTrainedModel):
         
         print('Loading VIT')
         self.visual_encoder, self.ln_vision = Blip2Base.init_vision_encoder(
-            model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="fp16"
+            model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="bf16"
         )
+        print("Loading VIT Done")
         freeze_vit = True # freeze vision encoder
         if freeze_vit:
             for name, param in self.visual_encoder.named_parameters():
@@ -495,8 +496,8 @@ class LlamaModel(LlamaPreTrainedModel):
                 param.requires_grad = False
             self.ln_vision = self.ln_vision.eval()
             self.ln_vision.train = disabled_train
-            logger.info("freeze vision encoder") # logging 
-        print('Loading VIT Done')
+            #logger.info("freeze vision encoder") # logging 
+        print('Freeze VIT Done')
 
         print('Loading Q-Former')
         self.Qformer, self.query_tokens = Blip2Base.init_Qformer(
@@ -776,27 +777,36 @@ class LlamaModel(LlamaPreTrainedModel):
                 if vision_tower.config.use_im_start_end:
                     #print('using im start end')
                     cur_image_features = image_features[cur_image_idx]
-                    cur_mask_features = mask_features[cur_image_idx]
+                    if self.maskmodel is not None:
+                        cur_mask_features = mask_features[cur_image_idx]
                     num_patches = cur_image_features.shape[0]
                     if (cur_input_ids == vision_tower.config.im_start_token).sum() != (cur_input_ids == vision_tower.config.im_end_token).sum():
                         raise ValueError("The number of im_start_token and im_end_token should be the same")
                     image_start_tokens = torch.where(cur_input_ids == vision_tower.config.im_start_token)[0]
-                    mask_start_tokens = torch.where(cur_input_ids == vision_tower.config.mask_start_token)[0]
+                    if self.maskmodel is not None:
+                        mask_start_tokens = torch.where(cur_input_ids == vision_tower.config.mask_start_token)[0]
+                    else:
+                        # dummy 
+                        mask_start_tokens = image_start_tokens
                     
                     for image_start_token_pos, mask_start_token_pos in zip(image_start_tokens, mask_start_tokens):
                         cur_image_features = image_features[cur_image_idx].to(device=cur_input_embeds.device)
-                        cur_mask_features = mask_features[cur_image_idx].to(device=cur_input_embeds.device)
+                        if self.maskmodel is not None:
+                            cur_mask_features = mask_features[cur_image_idx].to(device=cur_input_embeds.device)
+                            num_mask_patches = cur_mask_features.shape[0]
                         num_patches = cur_image_features.shape[0]
-                        num_mask_patches = cur_mask_features.shape[0]
+                       
                         if cur_input_ids[image_start_token_pos + num_patches + 1] != vision_tower.config.im_end_token:
                             raise ValueError("Seems that the image is cut.")
-                        if cur_input_ids[mask_start_token_pos + num_mask_patches + 1] != vision_tower.config.mask_end_token:
-                            raise ValueError("Seems that the mask image is cut.")
+                        if self.maskmodel is not None:
+                            if cur_input_ids[mask_start_token_pos + num_mask_patches + 1] != vision_tower.config.mask_end_token:
+                                raise ValueError("Seems that the mask image is cut.")
                         #print("cur_input_embeds", cur_input_embeds.shape)
                         cur_new_input_embeds = torch.cat((cur_input_embeds[:image_start_token_pos+1], cur_image_features, cur_input_embeds[image_start_token_pos + num_patches + 1:]), dim=0)
                         #print("cur_new_input_embeds", cur_new_input_embeds.shape)
                         #temp_length = len(cur_new_input_embeds)
-                        cur_new_input_embeds = torch.cat((cur_new_input_embeds[:mask_start_token_pos+1], cur_mask_features, cur_new_input_embeds[mask_start_token_pos + num_mask_patches + 1:]), dim=0)
+                        if self.maskmodel is not None:
+                            cur_new_input_embeds = torch.cat((cur_new_input_embeds[:mask_start_token_pos+1], cur_mask_features, cur_new_input_embeds[mask_start_token_pos + num_mask_patches + 1:]), dim=0)
                         #print("cur_new_input_embeds after mask", cur_new_input_embeds.shape)
                         cur_image_idx += 1
                     new_input_embeds.append(cur_new_input_embeds)

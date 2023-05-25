@@ -6,7 +6,7 @@ from llava.conversation import conv_templates
 from llava.utils import disable_torch_init
 from transformers import CLIPVisionModel, CLIPImageProcessor, StoppingCriteria
 import llava.model.blip_llama_infer as blip_llama
-from llava.model.blip2_infer import Blip2Base, disabled_train
+from llava.model.blip2 import Blip2Base, disabled_train
 from llava.model.dist_utils import download_cached_file
 
 from PIL import Image
@@ -16,7 +16,7 @@ import requests
 from PIL import Image
 from io import BytesIO
 
-
+IGNORE_INDEX = -100
 DEFAULT_IMAGE_TOKEN = "<image>"
 DEFAULT_IMAGE_PATCH_TOKEN = "<im_patch>"
 DEFAULT_IM_START_TOKEN = "<im_start>"
@@ -57,8 +57,7 @@ def eval_model(args):
     model_name = os.path.expanduser(args.model_name)
     tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
     
-    #hack changed it 32
-    model = blip_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).cuda() 
+    model = blip_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(args.device)
     #print(model.model.Qformer.dtype)
     #model.model.Qformer = model.model.Qformer.to(dtype=torch.float32)
     #-------------------------------------------------------
@@ -159,7 +158,7 @@ def eval_model(args):
     # model.model.llama_proj = mm_projector.half().cuda()
     # print("\nLoaded pretrained mm_projector")
     
-    model.to("cuda")
+    model.to(args.device)
     
     qs = args.query
     text_input = args.query
@@ -175,8 +174,16 @@ def eval_model(args):
 
     image = load_image(args.image_file)
     image_tensor = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-    input_ids = torch.as_tensor(inputs.input_ids).cuda() # , dtype=torch.float16).cuda()  ## added dtype
-
+    input_ids = torch.as_tensor(inputs.input_ids).to(args.device) # , dtype=torch.float16).cuda()  ## added dtype
+    # --------- -----
+    # image2 = load_image("https://llava-vl.github.io/static/images/view.jpg")
+    # qs2 = "What are the things I should be cautious about when I visit here?"
+    # image_tensor_2 = image_processor.preprocess(image2, return_tensors='pt')['pixel_values'][0]
+    # image_input = torch.stack([image_tensor, image_tensor_2]).to(args.device)
+    # text_input = [text_input, qs2]
+    
+    # ------ --- -- - - -- - -
+    
     keywords = ['###']
     stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
@@ -187,7 +194,7 @@ def eval_model(args):
         output_ids = model.generate(
             input_ids,
             text_input=text_input, 
-            images=image_tensor.unsqueeze(0).cuda(),
+            images= image_tensor.unsqueeze(0).to(args.device),
             do_sample=True,
             temperature=0.7,
             max_new_tokens=1024,
@@ -228,6 +235,7 @@ if __name__ == "__main__":
     parser.add_argument("--conv-mode", type=str, default="multimodal")
     parser.add_argument("--num-chunks", type=int, default=1)
     parser.add_argument("--chunk-idx", type=int, default=0)
+    parser.add_argument("--device", type=str, default='cuda:1')
     args = parser.parse_args()
 
     eval_model(args)
