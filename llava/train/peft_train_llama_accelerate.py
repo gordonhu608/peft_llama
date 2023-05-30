@@ -573,6 +573,9 @@ def train():
         # freeze base model's layers
         param.requires_grad = False
     
+    for param in model.model.llama_proj.parameters():
+        param.requires_grad =True   
+        
     model.enable_input_require_grads()
     config = LoraConfig(
         r= 8, #lora_r, #16
@@ -581,7 +584,7 @@ def train():
         lora_dropout=0.05,  
         bias="none",
         task_type="CAUSAL_LM",
-        #modules_to_save=['Qformer', 'llama_proj', 'query_tokens'] #hack 
+        modules_to_save=['llama_proj']   ## 'Qformer', , 'query_tokens'
     )
     
     model = get_peft_model(model, config)

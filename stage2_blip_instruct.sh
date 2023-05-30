@@ -1,16 +1,17 @@
   #\torchrun --nnodes=1 --nproc_per_node= #WORLD_SIZE=2 
-WORLD_SIZE=1 CUDA_VISIBLE_DEVICES=1 \
-torchrun --nnodes=1 --nproc_per_node=1 \
+  #torchrun --nnodes=1 --nproc_per_node=1 \
+WORLD_SIZE=2 CUDA_VISIBLE_DEVICES=0,1 \
+    torchrun --nnodes=1 --nproc_per_node=2\
     llava/train/peft_train_llama_accelerate.py \
-    --model_name_or_path checkpoints/pretrain_blip_projection_with_text \
-    --data_path data/llava_instruct_150k.json  \
-    --image_folder data/train2017 \
+    --model_name_or_path ./checkpoints/blip_projection_layer_558_freeze \
+    --data_path  data/llava_instruct_150k.json  \
+    --image_folder data/train2017/ \
     --vision_tower openai/clip-vit-large-patch14 \
     --mm_vision_select_layer -2 \
     --mm_use_im_start_end True \
     --bf16 True \
-    --output_dir ./checkpoints/stage2_blip_epoch3 \
-    --num_train_epochs 3 \
+    --output_dir ./checkpoints/panda_stage2_blip_epoch1_test \
+    --num_train_epochs 1 \
     --per_device_train_batch_size 4 \
     --per_device_eval_batch_size 4 \
     --gradient_accumulation_steps 1 \
@@ -28,3 +29,7 @@ torchrun --nnodes=1 --nproc_per_node=1 \
     --ddp_find_unused_parameters False \
     --lazy_preprocess True \
     --report_to wandb
+
+    #../pandagpt_visual_instruction_dataset/llava_pandagpt4_visual_instruction_data.json
+
+    #../pandagpt_visual_instruction_dataset/images

@@ -1,7 +1,7 @@
 import argparse
 #from models.BLIP2.BLIP2 import BLIP2
 import more_itertools
-from tqdm import tqdm
+from tqdm.auto import tqdm
 import datetime
 import os
 import json
@@ -9,18 +9,48 @@ import re
 from datasets.vqa_dataset import textVQADataset, docVQADataset, ocrVQADataset, STVQADataset
 from datasets.ocr_dataset import ocrDataset
 #from models.lavis.lavis import lavis
-from models.BLIP2.BLIP2 import BLIP2
-from llava.utils import disable_torch_init
 import torch
 import numpy as np
+
+import argparse
+from transformers import AutoTokenizer, AutoModelForCausalLM
+import torch
+import os
+# from llava.conversation import conv_templates
+# from llava.utils import disable_torch_init
+# from transformers import CLIPVisionModel, CLIPImageProcessor, StoppingCriteria
+# import llava.model.blip_llama_infer as blip_llama
+# from llava.model.blip2 import Blip2Base, disabled_train
+# from llava.model.dist_utils import download_cached_file
+# from llava.utils import KeywordsStoppingCriteria, load_image
+
+# from peft import PeftModel
+
+
+DEFAULT_IMAGE_TOKEN = "<image>"
+DEFAULT_IMAGE_PATCH_TOKEN = "<im_patch>"
+DEFAULT_IM_START_TOKEN = "<im_start>"
+DEFAULT_IM_END_TOKEN = "<im_end>"
+
 def get_model(args):
+    def disable_torch_init():
+        """
+        Disable the redundant torch default initialization to accelerate model creation.
+        """
+        import torch
+        setattr(torch.nn.Linear, "reset_parameters", lambda self: None)
+        setattr(torch.nn.LayerNorm, "reset_parameters", lambda self: None)
+    import sys
+    sys.path.append("/home/shawn/nvme/vl_research/LAVIS")
+    from lavis.models import load_model_and_preprocess
+    # loads InstructBLIP model
     disable_torch_init()
-    if args.model_name=='BLIP2':
-        model = BLIP2(args.BLIP2_model_path, args.device)
-        #model = lavis(args.BLIP2_model_name, args.BLIP2_model_type, args.device)
-    #elif args.model_name=='mPLUG-Owl':
-    #   model = 
-    return model
+    model, vis_processors, _ = load_model_and_preprocess(name="blip2_vicuna_instruct", model_type="vicuna7b", is_eval=True, device=args.device)
+    # prepare the image
+
+    #model.to(args.device)
+    return model, vis_processors
+
 def has_word(sentence, word):
     pattern = r"\b" + re.escape(word) + r"\b"
     match = re.search(pattern, sentence)
@@ -257,17 +287,28 @@ def evaluate_VQA(
     model_name,
     dataset_name,
     time,
+    tokenizer,
     batch_size=1,
     answer_path='./answers'
 ):
     predictions=[]
+
     for batch in more_itertools.chunked(
         tqdm(dataset, desc="Running inference"), batch_size
     ):
         batch = batch[0]
-        output = model.generate(image=batch['image_path'], question=batch['question'])
-        print("\n outputs:", output, "\n answer", batch['gt_answers'])
-        answer_dict={'question':batch['question'], 'answer':output, 
+       
+        qs = batch['question']
+        #print("qs:", qs)
+        from PIL import Image
+        image = Image.open(batch['image_path']).convert('RGB')
+        vis_processors = tokenizer
+        image = vis_processors["eval"](image).unsqueeze(0).to(args.device)
+        
+        outputs = model.generate({"image": image, "prompt": qs})[0]
+        print("\n outputs:", outputs, "\n answer", batch['gt_answers'])
+        #output = #model.generate(image=batch['image_path'], question=batch['question'])
+        answer_dict={'question':batch['question'], 'answer':outputs, 
         'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
         'model_name':model_name}
         predictions.append(answer_dict)
@@ -288,6 +329,9 @@ def evaluate_VQA(
                 correct+=1
             num+=1
     print(f'{dataset_name}:{float(correct)/num}')
+    
+    #print(img_list)
+    
     return float(correct)/num
 def evaluate_OCR(
     model,
@@ -305,7 +349,6 @@ def evaluate_OCR(
     ):
         batch = batch[0]
         output = model.generate(image=batch['image_path'], question=question)
-        print("\n outputs:", output, "\n answer", batch['gt_answers'])
         answer_dict={'question':question, 'answer':output, 
         'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
         'model_name':model_name}
@@ -341,8 +384,8 @@ def parse_args():
     parser.add_argument("--textVQA_ann_path", type=str, default="../data/textVQA/TextVQA_0.5.1_val.json")
 
     #docVQA
-    parser.add_argument("--docVQA_image_dir_path", type=str, default="../data/docVQA/val")
-    parser.add_argument("--docVQA_ann_path", type=str, default="../data/docVQA/val/val_v1.0.json")
+    parser.add_argument("--docVQA_image_dir_path", type=str, default="./data/docVQA/val")
+    parser.add_argument("--docVQA_ann_path", type=str, default="./data/docVQA/val/val_v1.0.json")
 
     #ocrVQA
     parser.add_argument("--ocrVQA_image_dir_path", type=str, default="../data/ocrVQA/images")
@@ -386,31 +429,35 @@ def parse_args():
         help="Whether to evaluate on ocr."
     )
     #BLIP2
-    parser.add_argument("--BLIP2_model_path", type=str, default="Salesforce/blip2-opt-2.7b")
+    #parser.add_argument("--BLIP2_model_path", type=str, default="/home/zhangli/GPT4/BLIP2-flant5")
     parser.add_argument("--BLIP2_model_name", type=str, default="blip2_opt")#blip2_t5  blip2_opt blip2_vicuna_instruct
     parser.add_argument("--BLIP2_model_type", type=str, default="pretrain_opt6.7b")#pretrain_flant5xxl pretrain_opt6.7b vicuna13b
 
 
     parser.add_argument("--model_name", type=str, default="BLIP2")#mPLUG,miniGPT4,LLaVA
     parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument("--vision-tower", type=str, default='openai/clip-vit-large-patch14')
+    parser.add_argument("--conv-mode", type=str, default="multimodal")
+    parser.add_argument("--lora-weight", type=str)
+
     args = parser.parse_args()
     return args
 
 def main(args):
     np.random.seed(0)
     max_sample_num = 5000
-    model = get_model(args)
+    model, tokenizer  = get_model(args)
     '''ocr_dataset_name=['IIIT5K','svt','IC13_857','IC15_1811','svtp','ct80',
                   'cocotext','ctw','totaltext','HOST','WOST','WordArt']'''
     ocr_dataset_name = args.ocr_dataset_name.split()
     result = {}
     time = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     if args.eval_textVQA:
-        print("eval_textVQA")
+        print("\nEvaluating textVQA")
         dataset = textVQADataset(args.textVQA_image_dir_path, args.textVQA_ann_path)
         from torch.utils.data import Subset
-        dataset = Subset(dataset, indices=range(100))
-        acc = evaluate_VQA(model, dataset, args.model_name, 'textVQA', time)
+        dataset = Subset(dataset, indices=range(10))
+        acc = evaluate_VQA(model, dataset, args.model_name, 'textVQA', time, tokenizer=tokenizer)
         result['textVQA'] = acc
     if args.eval_docVQA:
         dataset = docVQADataset(args.docVQA_image_dir_path, args.docVQA_ann_path)

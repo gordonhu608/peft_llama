@@ -66,6 +66,7 @@ class ModelArguments:
     mm_use_im_start_end: bool = field(default=False)
     maskmodel: bool = field(default=False)
     qformer_text_input: bool = field(default=True) 
+    freeze_qformer: bool =field(default=False)
 
 @dataclass
 class DataArguments:
@@ -406,6 +407,7 @@ def train():
         (ModelArguments, DataArguments, TrainingArguments))
     model_args, data_args, training_args = parser.parse_args_into_dataclasses()
 
+    #print(model_args)
     model = modeling_llama.LlamaForCausalLM.from_pretrained(
         model_args.model_name_or_path,
         cache_dir=training_args.cache_dir,
@@ -511,8 +513,19 @@ def train():
         
         Qformer.cls = None
         
+        query_tokens = torch.nn.Parameter(q_former_state_dict['query_tokens'])
+        
+        if model_args.freeze_qformer:
+            print("\nfreezing qfromer, not insturcting it")
+            for name, param in Qformer.named_parameters():
+                param.requires_grad = False
+            Qformer = Qformer.eval()
+            Qformer.train = disabled_train
+            query_tokens.requires_grad = False
+        
+        
         #model.model.query_tokens = torch.nn.Parameter(q_former_state_dict['query_tokens'].clone().detach().requires_grad_(True).to(dtype=torch.float16))  
-        model.model.query_tokens = torch.nn.Parameter(q_former_state_dict['query_tokens'])  #.to(dtype=dtype))
+        model.model.query_tokens = query_tokens #.to(dtype=dtype))
         print("orginal Qformer dtype", model.model.Qformer.dtype)
         print("init Qformer dytype", model.model.Qformer.dtype)
         model.model.Qformer = Qformer #.half() #.to(dtype=dtype) #.cuda()
@@ -524,20 +537,20 @@ def train():
         #     mm_projector = nn.Linear(vision_config.hidden_size, model.config.hidden_size)
         # else:
         
-        llm_proj_weight = q_former_state_dict['llm_proj.weight']
-        llm_proj_bias = q_former_state_dict['llm_proj.bias']
-        llama_proj = model.model.llama_proj
-        llama_proj.weight = torch.nn.Parameter(llm_proj_weight)
-        llama_proj.bias = torch.nn.Parameter(llm_proj_bias)
-        llama_proj.to(dtype=dtype, device=training_args.device)
-        model.model.llama_proj = llama_proj
+        # llm_proj_weight = q_former_state_dict['llm_proj.weight']
+        # llm_proj_bias = q_former_state_dict['llm_proj.bias']
+        # llama_proj = model.model.llama_proj
+        # llama_proj.weight = torch.nn.Parameter(llm_proj_weight)
+        # llama_proj.bias = torch.nn.Parameter(llm_proj_bias)
+        # llama_proj.to(dtype=dtype, device=training_args.device)
+        # model.model.llama_proj = llama_proj
         
-        # mm_projector =  torch.nn.Linear(
-        #     model.model.Qformer.config.hidden_size, model.model.config.hidden_size
-        # )   #model.model.llama_proj
-        # mm_projector_weights = torch.load("data/minigpt_proj_7b.pth", map_location='cpu')['model']
-        # mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
-        #model.model.llama_proj = mm_projector #.to(dtype=torch.float16)
+        mm_projector =  torch.nn.Linear(
+            model.model.Qformer.config.hidden_size, model.model.config.hidden_size
+        )   #model.model.llama_proj
+        mm_projector_weights = torch.load("data/minigpt_proj_7b.pth", map_location='cpu')['model']
+        mm_projector.load_state_dict({k.split('.')[-1]: v for k, v in mm_projector_weights.items() if 'llama_proj' == k.split('.')[0]})
+        model.model.llama_proj = mm_projector #.to(dtype=torch.float16)
         
         #print("mm_projector dtype", mm_projector.weight.dtype, mm_projector.bias.dtype)
         print("\nLoaded pretrained mm_projector")
@@ -551,9 +564,11 @@ def train():
                  p.requires_grad = True
             # for p in model.model.ln_vision.parameters():
             #     p.requires_grad = True
-            for p in model.model.Qformer.parameters():
-                p.requires_grad = True
-            model.model.query_tokens.requires_grad = True
+            if not model_args.freeze_qformer:
+                print("We are updating qformer weight")
+                for p in model.model.Qformer.parameters():
+                    p.requires_grad = True
+                model.model.query_tokens.requires_grad = True
         
         model.config.mm_use_im_start_end = model_args.mm_use_im_start_end
         data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
@@ -599,6 +614,7 @@ def train():
 
         model.model.visual_encoder.config = vision_config
 
+        model = model.to(dtype=dtype)
         model = model.to(device=training_args.device)
     #-----------------------------------------------
     # qs = "Provide a brief description of the given image"

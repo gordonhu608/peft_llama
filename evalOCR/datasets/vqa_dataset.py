@@ -54,17 +54,19 @@ class ocrVQADataset(Dataset):
         self.question_list = []
         self.answer_list = []
         dataset = json.load(open(ann_path, "r"))
-        import pdb;pdb.set_trace()
+        #import pdb;pdb.set_trace()
         for idx, data in enumerate(dataset):
             questions =  dataset[data]['questions']
             for index, question in enumerate(questions):
                 image_file = os.path.join(image_dir_path, f'{data}.jpg')
-                gt_answers = dataset[data]['answers'][index]
-                self.image_list.append(image_file)
-                self.answer_list.append(gt_answers)
-                self.question_list.append(question)
+                #hack 
+                if os.path.isfile(image_file):
+                    gt_answers = dataset[data]['answers'][index]
+                    self.image_list.append(image_file)
+                    self.answer_list.append(gt_answers)
+                    self.question_list.append(question)
     def __len__(self):
-        return len(self.data)
+        return len(self.question_list)
 
     def __getitem__(self, idx):
         question = self.question_list[idx]
