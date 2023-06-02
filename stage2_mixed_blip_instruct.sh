@@ -1,21 +1,21 @@
   #\torchrun --nnodes=1 --nproc_per_node= #WORLD_SIZE=2 
   #torchrun --nnodes=1 --nproc_per_node=1 \
-WORLD_SIZE=1 CUDA_VISIBLE_DEVICES=1 \
+WORLD_SIZE=1 CUDA_VISIBLE_DEVICES=0 \
   python \
     llava/train/train_insblip_peft.py \
     --model_name_or_path ./data/llama_vicuna_7b\
-    --data_path  ../pandagpt_visual_instruction_dataset/llava_pandagpt4_visual_instruction_data.json\
-    --image_folder ../pandagpt_visual_instruction_dataset/images \
+    --data_path  ./data/clean_mixed_ocr_text_panda_400k.json\
+    --image_folder ./data \
     --vision_tower openai/clip-vit-large-patch14 \
     --mm_vision_select_layer -2 \
     --tune_mm_mlp_adapter True \
     --mm_use_im_start_end True \
     --bf16 True \
-    --output_dir ./checkpoints/panda_insblip_epoch1_b32\
+    --output_dir ./checkpoints/trained_mixed_insblip_epoch1\
     --num_train_epochs 1 \
-    --per_device_train_batch_size 4 \
+    --per_device_train_batch_size 8 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 8 \
+    --gradient_accumulation_steps 4 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
     --save_steps 5000 \
@@ -29,7 +29,7 @@ WORLD_SIZE=1 CUDA_VISIBLE_DEVICES=1 \
     --gradient_checkpointing True \
     --ddp_find_unused_parameters False \
     --lazy_preprocess True \
-    --freeze_qformer True \
+    --freeze_qformer False \
     --report_to wandb
 
 

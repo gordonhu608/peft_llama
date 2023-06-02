@@ -16,33 +16,62 @@ import argparse
 from transformers import AutoTokenizer, AutoModelForCausalLM
 import torch
 import os
-from llava.conversation import conv_templates
+from llava.conversation import conv_templates,mysimpleconv
 from llava.utils import disable_torch_init
 from transformers import CLIPVisionModel, CLIPImageProcessor, StoppingCriteria
-import llava.model.blip_modeling_llama as modeling_llama
+import llava.model.blip_llama_infer as blip_llama
 from llava.model.blip2 import Blip2Base, disabled_train
 from llava.model.dist_utils import download_cached_file
 from llava.utils import KeywordsStoppingCriteria, load_image
-import torch.nn as nn 
 from peft import PeftModel
-
+DEFAULT_PAD_TOKEN = "[PAD]"
+DEFAULT_EOS_TOKEN = "</s>"
+DEFAULT_BOS_TOKEN = "</s>"
+DEFAULT_UNK_TOKEN = "<unk>"
 DEFAULT_IMAGE_TOKEN = "<image>"
 DEFAULT_IMAGE_PATCH_TOKEN = "<im_patch>"
 DEFAULT_IM_START_TOKEN = "<im_start>"
 DEFAULT_IM_END_TOKEN = "<im_end>"
-
+    
 def get_model(args):
     
-    # model.to('cpu')  # lora weight is on cpu
-    # model = PeftModel.from_pretrained(
-    #         model,
-    #         lora_weight,
-    #         torch_dtype=torch.bfloat16,
-    #     )
-    # model.to(args.device)
-    # model.eval()
-    # if torch.__version__ >= "2":
-    #     model = torch.compile(model)
+
+    disable_torch_init()
+    dtype = torch.bfloat16 
+    
+    model_name = os.path.expanduser(args.model_name)
+    lora_weight = os.path.expanduser(args.lora_weight)
+    tokenizer = AutoTokenizer.from_pretrained(model_name, use_fast=False)
+    
+    model = blip_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(args.device)
+
+    mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
+    print("mm_use_im", mm_use_im_start_end)
+    # tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
+    image_token_len = 32  
+    
+    # if mm_use_im_start_end:
+    #     tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+
+    vision_config = model.model.visual_encoder.config
+    vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
+    vision_config.use_im_start_end = mm_use_im_start_end
+    if mm_use_im_start_end:
+        vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
+    
+    model.model.visual_encoder.config = vision_config
+    
+    model.to('cpu')  # lora weight is on cpu
+    model = PeftModel.from_pretrained(
+            model,
+            lora_weight,
+            torch_dtype=torch.bfloat16,
+        )
+    model.to(args.device)
+    model.eval()
+    if torch.__version__ >= "2":
+        model = torch.compile(model)
+        
     model.to(args.device)
     return model, tokenizer
 
@@ -245,7 +274,7 @@ class VQAEval:
             gt_answers = gt_answers.strip()
             gt_answers = self.processPunctuation(gt_answers)
             gt_answers = self.processDigitArticle(gt_answers)
-            if has_word(answer, gt_answers[i]):
+            if has_word(answer, gt_answers):
                 return 1
             else:
                 return 0
@@ -276,206 +305,87 @@ class VQAEval:
                 outText[wordId] = self.contractions[word]
         outText = " ".join(outText)
         return outText
-
-@torch.no_grad()
 def evaluate_VQA(
     model,
     dataset,
     model_name,
     dataset_name,
     time,
+    tokenizer,
     batch_size=1,
     answer_path='./answers'
-):  
-    
-   #-----------------load model-----------------
-
-    disable_torch_init()
-    dtype = torch.bfloat16
-    model_name = os.path.expanduser(args.model_name)
-    from transformers import LlamaTokenizer
-    tokenizer = LlamaTokenizer.from_pretrained(model_name, use_fast=False, truncation_side="left")
-   
-    model = modeling_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(args.device)
-
-    tokenizer.add_special_tokens({'pad_token': '[PAD]'})
-    tokenizer.add_special_tokens({'bos_token': '</s>'})
-    tokenizer.add_special_tokens({'eos_token': '</s>'})
-    #tokenizer.add_special_tokens({'unk_token': '</s>'})
-    tokenizer.add_special_tokens({'unk_token': '<unk>'})
-
-    model.resize_token_embeddings(len(tokenizer))
-    for name, param in model.named_parameters():
-        param.requires_grad = False
-
-    instruct_qformer = "https://storage.googleapis.com/sfr-vision-language-research/LAVIS/models/InstructBLIP/instruct_blip_vicuna7b_trimmed.pth"
-    cached_file = download_cached_file(
-                instruct_qformer, check_hash=False, progress=True
-            )
-    q_former_checkpoint = torch.load(cached_file, map_location="cpu")
-    q_former_state_dict = q_former_checkpoint["model"]
-
-    visual_encoder, ln_vision =   Blip2Base.init_vision_encoder(
-        model_name="eva_clip_g", img_size=224, drop_path_rate=0, use_grad_checkpoint=False, precision="bfloat16"
-    )
-    for name, param in visual_encoder.named_parameters():
-        param.requires_grad = False
-    visual_encoder = visual_encoder.eval()
-    visual_encoder.train = disabled_train
-    visual_encoder = visual_encoder.to(dtype=dtype, device=args.device)    
-    
-    ln_vision_weight = q_former_state_dict['ln_vision.weight']
-    ln_vision_bias = q_former_state_dict['ln_vision.bias']
-    llm_proj_weight = q_former_state_dict['llm_proj.weight']
-    llm_proj_bias = q_former_state_dict['llm_proj.bias']
-    query_tokens = torch.nn.Parameter(q_former_state_dict['query_tokens'].to(dtype=dtype, device=args.device))
-    
-    del q_former_state_dict['ln_vision.weight']
-    del q_former_state_dict['ln_vision.bias']
-    del q_former_state_dict['llm_proj.weight']
-    del q_former_state_dict['llm_proj.bias']
-    del q_former_state_dict['query_tokens']
-    q_former_state_dict = {'.'.join(key.split('.')[1:]): value for key, value in q_former_state_dict.items()}
-
-    ln_vision.weight = torch.nn.Parameter(ln_vision_weight)
-    ln_vision.bias = torch.nn.Parameter(ln_vision_bias)
-    for name, param in ln_vision.named_parameters():
-        param.requires_grad = False
-    ln_vision.eval()
-    ln_vision.train = disabled_train
-
-    ln_vision = ln_vision.to(dtype=dtype, device=args.device)   
-
-    print("\nLoading the pretrained vision encoder")
-    
-    Qformer, _ = Blip2Base.init_Qformer(
-            num_query_token=32, vision_width=visual_encoder.num_features )
- 
-    qformer_tokenizer = Blip2Base.init_tokenizer(truncation_side="left")  
-
-    Qformer.resize_token_embeddings(len(qformer_tokenizer))
-    
-    Qformer.cls = None
-    Qformer.load_state_dict(q_former_state_dict, strict=False)
- 
-    llama_proj = nn.Linear(
-            Qformer.config.hidden_size, model.config.hidden_size
-        )
-    llama_proj.weight = torch.nn.Parameter(llm_proj_weight)
-    llama_proj.bias = torch.nn.Parameter(llm_proj_bias)
-    for name, param in llama_proj.named_parameters():
-        param.requires_grad = False
-    llama_proj.eval()
-    llama_proj.train = disabled_train
-    llama_proj = llama_proj.to(dtype=dtype, device=args.device)
-  
-    #query_tokens = q_former_state_dict['query_tokens'].to(dtype=dtype, device=args.device)
-    Qformer = Qformer.to(dtype=dtype, device=args.device)
-    #---------------------------------------------  
-
+):
     predictions=[]
-    #hyperparameters ==================
-    max_txt_len = 128 
-    use_nucleus_sampling=False
-    num_beams=5
-    max_length= 256
-    min_length=1
-    top_p=0.9
-    repetition_penalty=1.5
-    length_penalty=1
-    num_captions=1
-    temperature=1
-    #================================
+    #hack 
     #img_list = []
     for batch in more_itertools.chunked(
         tqdm(dataset, desc="Running inference"), batch_size
     ):
         batch = batch[0]
-
-        bs = 1  # for now 
-        query_tokens = query_tokens.expand(bs, -1, -1)
+        #hack change peft vl model generate
        
         qs = batch['question']
-      
-        text_Qformer = qformer_tokenizer(
-            qs,
-            padding='longest',
-            truncation=True,
-            max_length=max_txt_len,
-            return_tensors="pt",
-        ).to(args.device)
-        query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(args.device)
-        Qformer_atts = torch.cat([query_atts, text_Qformer.attention_mask], dim=1)
+        text_input = batch['question']
+        mm_use_im_start_end = True 
+        image_token_len = 32  
+        if mm_use_im_start_end:
+            qs = qs + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len + DEFAULT_IM_END_TOKEN
+        else:
+            qs = qs + '\n' + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len
 
-       # prompt_tokens = tokenizer(qs, return_tensors="pt")
+        #conv = conv_templates[args.conv_mode].copy()
+        conv = mysimpleconv.copy()
+        conv.append_message(conv.roles[0], qs)
+        prompt = conv.get_prompt()
+        inputs = tokenizer([prompt])
+
         image = load_image(batch['image_path'])
+        # img_list.append(batch['image_path'])
+        # print("\nquestion: " ,batch['question'])
         
-        # from transformers import CLIPImageProcessor, BlipImageProcessor
-        # #image_processor =  BlipImageProcessor.from_pretrained("Salesforce/blip2-opt-2.7b")
-        # #image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.bfloat16)
-        # image = image_processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
+        from transformers import CLIPImageProcessor, BlipImageProcessor
+        image_processor =  BlipImageProcessor.from_pretrained("Salesforce/blip2-opt-2.7b")
+        #image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.bfloat16)
+        image_tensor = image_processor(images=image, return_tensors='pt')['pixel_values'][0]
+        image_tensor = image_tensor.unsqueeze(0).to(dtype=torch.bfloat16, device=args.device)
         
-        from transformers import Blip2Processor, Blip2ForConditionalGeneration
-        processor = Blip2Processor.from_pretrained("Salesforce/blip2-opt-2.7b")
-        image = processor(images=image, return_tensors="pt").to(args.device, torch.float16)['pixel_values']
+        input_ids = torch.as_tensor(inputs.input_ids).to(args.device) # , dtype=torch.float16).cuda()  ## added dtype
 
-        with torch.cuda.amp.autocast(): # mixed precision   
-            image_embeds = ln_vision(visual_encoder(image))
-        image_embeds = image_embeds.to(dtype=dtype, device=args.device)
-        image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long).to(args.device)
+        keywords = ['###']
+        stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
-        # print(f"Input data types:")
-        # print(f"text_Qformer.input_ids dtype: {text_Qformer.input_ids.dtype}")
-        # print(f"Qformer_atts dtype: {Qformer_atts.dtype}")
-        # print(f"query_tokens dtype: {query_tokens.dtype}")
-        # print(f"image_embeds dtype: {image_embeds.dtype}")
-        # print(f"image_atts dtype: {image_atts.dtype}")
+        with torch.inference_mode():
+            output_ids = model.generate(
+                input_ids=input_ids,
+                text_input=text_input, 
+                images=image_tensor,
+                do_sample=True,
+                temperature=0.7,
+                max_new_tokens=1024,
+                stopping_criteria=[stopping_criteria])
 
-        query_output = Qformer.bert(
-            text_Qformer.input_ids,
-            attention_mask=Qformer_atts,
-            query_embeds=query_tokens,
-            encoder_hidden_states=image_embeds,
-            encoder_attention_mask=image_atts,
-            return_dict=True,
-        )
+        input_token_len = input_ids.shape[1]
+        n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
+        if n_diff_input_output > 0:
+            print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
+        outputs = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
 
-        inputs_llm = llama_proj(query_output.last_hidden_state[:,:query_tokens.size(1),:])
-        atts_llm = torch.ones(inputs_llm.size()[:-1], dtype=torch.long).to(args.device)
-        
-        llm_tokens = tokenizer(
-            qs,
-            padding="longest",
-            return_tensors="pt"
-        ).to(args.device)
-        # ------------------------------------
-        with torch.cuda.amp.autocast(): # mixed precision
-            inputs_embeds = model.get_input_embeddings()(llm_tokens.input_ids)
-            # concat image out and text out 
-            inputs_embeds = torch.cat([inputs_llm, inputs_embeds], dim=1)
-            attention_mask = torch.cat([atts_llm, llm_tokens.attention_mask], dim=1)
+        while True:
+            cur_len = len(outputs)
+            outputs = outputs.strip()
+            for pattern in ['###', 'Assistant:', 'Response:']:
+                if outputs.startswith(pattern):
+                    outputs = outputs[len(pattern):].strip()
+            if len(outputs) == cur_len:
+                break
 
-            outputs = model.generate(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                do_sample=use_nucleus_sampling,
-                top_p=top_p,
-                temperature=temperature,
-                num_beams=num_beams,
-                max_length=max_length,
-                min_length=min_length,
-                # eos_token_id=self.eos_token_id,
-                repetition_penalty=repetition_penalty,
-                length_penalty=length_penalty,
-                num_return_sequences=num_captions,
-            )
+        try:
+            index = outputs.index(conv.sep)
+        except ValueError:
+            outputs += conv.sep
+            index = outputs.index(conv.sep)
 
-        outputs[outputs == 0] = 2 # convert output id 0 to 2 (eos_token_id)
-        output_text = tokenizer.batch_decode(outputs, skip_special_tokens=True)
-        output_text = [text.strip() for text in output_text]
-        # ------------------------------------
-        if len(output_text) == 1:
-            outputs = output_text[0]
+        outputs = outputs[:index].strip()
         print("\n outputs:", outputs, "\n answer", batch['gt_answers'])
         #output = #model.generate(image=batch['image_path'], question=batch['question'])
         answer_dict={'question':batch['question'], 'answer':outputs, 
@@ -558,8 +468,8 @@ def parse_args():
     parser.add_argument("--docVQA_ann_path", type=str, default="./data/docVQA/val/val_v1.0.json")
 
     #ocrVQA
-    parser.add_argument("--ocrVQA_image_dir_path", type=str, default="./data/ocrVQA/images")
-    parser.add_argument("--ocrVQA_ann_path", type=str, default="./data/ocrVQA/dataset.json")
+    parser.add_argument("--ocrVQA_image_dir_path", type=str, default="../data/ocrVQA/images")
+    parser.add_argument("--ocrVQA_ann_path", type=str, default="../data/ocrVQA/dataset.json")
 
     #STVQA
     parser.add_argument("--STVQA_image_dir_path", type=str, default="./data/STVQA")
@@ -604,8 +514,8 @@ def parse_args():
     parser.add_argument("--BLIP2_model_type", type=str, default="pretrain_opt6.7b")#pretrain_flant5xxl pretrain_opt6.7b vicuna13b
 
 
-    parser.add_argument("--model_name", type=str, default="../data/hf_vicuna_7b")#mPLUG,miniGPT4,LLaVA
-    parser.add_argument("--device", type=str, default="cuda:0")
+    parser.add_argument("--model_name", type=str, default="BLIP2")#mPLUG,miniGPT4,LLaVA
+    parser.add_argument("--device", type=str, default="cuda:1")
     parser.add_argument("--vision-tower", type=str, default='openai/clip-vit-large-patch14')
     parser.add_argument("--conv-mode", type=str, default="multimodal")
     parser.add_argument("--lora-weight", type=str)
@@ -616,9 +526,7 @@ def parse_args():
 def main(args):
     np.random.seed(0)
     max_sample_num = 5000
- 
-    model = None 
-    #model, tokenizer  = get_model(args)
+    model, tokenizer  = get_model(args)
     '''ocr_dataset_name=['IIIT5K','svt','IC13_857','IC15_1811','svtp','ct80',
                   'cocotext','ctw','totaltext','HOST','WOST','WordArt']'''
     ocr_dataset_name = args.ocr_dataset_name.split()
@@ -629,7 +537,7 @@ def main(args):
         dataset = textVQADataset(args.textVQA_image_dir_path, args.textVQA_ann_path)
         # from torch.utils.data import Subset
         # dataset = Subset(dataset, indices=range(10))
-        acc = evaluate_VQA(model, dataset, args.model_name, 'textVQA', time)
+        acc = evaluate_VQA(model, dataset, args.model_name, 'textVQA', time, tokenizer=tokenizer)
         result['textVQA'] = acc
     if args.eval_docVQA:
         dataset = docVQADataset(args.docVQA_image_dir_path, args.docVQA_ann_path)
@@ -642,7 +550,7 @@ def main(args):
             len(dataset), max_sample_num, replace=False
         )
         dataset = torch.utils.data.Subset(dataset,random_indices)
-        acc = evaluate_VQA(model, dataset, args.model_name, 'ocrVQA', time)
+        acc = evaluate_VQA(model, dataset, args.model_name, 'ocrVQA', time,tokenizer=tokenizer)
         result['ocrVQA'] = acc
     
     if args.eval_STVQA:

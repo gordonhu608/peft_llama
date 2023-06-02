@@ -599,8 +599,10 @@ class LlamaModel(LlamaPreTrainedModel):
                 else:
                     image_forward_outs = vision_tower(images, output_hidden_states=True)
                     select_hidden_state_layer = getattr(self.config, "mm_vision_select_layer", -1)
+                    # from pdb import set_trace
+                    # set_trace()
                     select_hidden_state = image_forward_outs.hidden_states[select_hidden_state_layer]
-                    image_features = select_hidden_state[:, 1:]
+                    image_features = select_hidden_state[:, 1:] 
             if type(images) is list:
                 image_features = [self.mm_projector(image_feature)[0] for image_feature in image_features]
             else:

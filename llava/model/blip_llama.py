@@ -766,7 +766,6 @@ class LlamaModel(LlamaPreTrainedModel):
             cur_image_idx = 0
             #print("input_ids", input_ids.shape) # [1, 191]
              # [1, 191, 4096]
-      
             for cur_input_ids, cur_input_embeds in zip(input_ids, inputs_embeds):
                 if (cur_input_ids == vision_tower.config.im_patch_token).sum() == 0:
                     # multimodal LLM, but the current sample is not multimodal
@@ -788,7 +787,6 @@ class LlamaModel(LlamaPreTrainedModel):
                     else:
                         # dummy 
                         mask_start_tokens = image_start_tokens
-                    
                     for image_start_token_pos, mask_start_token_pos in zip(image_start_tokens, mask_start_tokens):
                         cur_image_features = image_features[cur_image_idx].to(device=cur_input_embeds.device)
                         if self.maskmodel is not None:

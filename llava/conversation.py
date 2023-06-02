@@ -161,7 +161,7 @@ class Conversation:
 
 conv_v1 = Conversation(
     system="A chat between a curious human and an artificial intelligence assistant. "
-           "The assistant gives helpful, detailed, and polite answers to the human's questions.",
+           "The assistant gives answers to the human's questions by following his instruction clearly.",
     roles=("Human", "Assistant"),
     messages=(
         ("Human", "Give three tips for staying healthy."),
@@ -187,8 +187,8 @@ conv_v1 = Conversation(
 )
 
 conv_v1_2 = Conversation(
-    system="A chat between a curious human and an artificial intelligence assistant. "
-           "The assistant gives helpful, detailed, and polite answers to the human's questions.",
+    system="A chat between a curious human and an assistant."
+           "The assistant gives answers to the human's questions by following his instruction clearly.",
     roles=("Human", "Assistant"),
     messages=(
         ("Human", "What are the key differences between renewable and non-renewable energy sources?"),
@@ -270,6 +270,18 @@ simple_conv_legacy = Conversation(
 
 
 default_conversation = conv_v1_2
+
+mysimpleconv = Conversation(
+     system="A chat between a curious human and an assistant."
+           "The assistant gives answers to the human's questions by following his instruction clearly.",
+    roles=("Human", "Assistant"),
+    messages=( ),
+    offset=2,
+    sep_style=SeparatorStyle.SINGLE,
+    sep="###",
+)
+
+
 conv_templates = {
     "default": conv_v1_2,
     "simple": simple_conv,

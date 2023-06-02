@@ -8,7 +8,7 @@ python llava/train/train.py \
     --mm_vision_select_layer -2 \
     --mm_use_im_start_end \
     --bf16 True \
-    --output_dir ./checkpoints/llava-7b-pretrain—— \
+    --output_dir ./checkpoints/llava-7b-pretrain_test \
     --num_train_epochs 1 \
     --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 4 \
