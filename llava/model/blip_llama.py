@@ -743,85 +743,19 @@ class LlamaModel(LlamaPreTrainedModel):
                 # print("llama_proj dtype", self.llama_proj.weight.dtype, self.llama_proj.bias.dtype)
                  
                 image_features = self.llama_proj(query_output.last_hidden_state[:,:query_tokens.size(1),:])
-                if self.maskmodel is not None:
-                    #print("are you sure using maskmodel?")
-                    with torch.no_grad():
-                        mask_features = []
-                        for image in images:
-                            mask_feature = self.maskmodel(image)
-                            mask_features.append(mask_feature)
-                            
-                    mask_features = self.mask_proj(torch.stack(mask_features, dim=0))
-                    #image_features = torch.cat((image_features, mask_feature), dim=1)
+                #atts_llm = torch.ones(inputs_llm.size()[:-1], dtype=torch.long).to(image.device)
             
                      
-            dummy_image_features = torch.zeros(32, 768, device=inputs_embeds.device, dtype=inputs_embeds.dtype) #originally 256, 1024
-            #dummy_mask_features = torch.zeros(256, 1024 maybe, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
-            #print("dummy_image+features dtype", dummy_image_features.dtype)
-            #dummy_image_features = dummy_image_features.to(dtype=torch.float16)
-            #print("device checking", inputs_embeds.device)
-            dummy_image_features = self.llama_proj(dummy_image_features) #[1,32, 4096]
+            # dummy_image_features = torch.zeros(32, 768, device=inputs_embeds.device, dtype=inputs_embeds.dtype) #originally 256, 1024
+            # #dummy_mask_features = torch.zeros(256, 1024 maybe, device=inputs_embeds.device, dtype=inputs_embeds.dtype)
+            # #print("dummy_image+features dtype", dummy_image_features.dtype)
+            # #dummy_image_features = dummy_image_features.to(dtype=torch.float16)
+            # #print("device checking", inputs_embeds.device)
+            # dummy_image_features = self.llama_proj(dummy_image_features) #[1,32, 4096]
             
-            new_input_embeds = []
-            cur_image_idx = 0
-            #print("input_ids", input_ids.shape) # [1, 191]
-             # [1, 191, 4096]
-            for cur_input_ids, cur_input_embeds in zip(input_ids, inputs_embeds):
-                if (cur_input_ids == vision_tower.config.im_patch_token).sum() == 0:
-                    # multimodal LLM, but the current sample is not multimodal
-                    print(' we are not at science qa yet')
-                    cur_input_embeds = cur_input_embeds + (0. * dummy_image_features).sum()
-                    new_input_embeds.append(cur_input_embeds)
-                    continue
-                if vision_tower.config.use_im_start_end:
-                    #print('using im start end')
-                    cur_image_features = image_features[cur_image_idx]
-                    if self.maskmodel is not None:
-                        cur_mask_features = mask_features[cur_image_idx]
-                    num_patches = cur_image_features.shape[0]
-                    if (cur_input_ids == vision_tower.config.im_start_token).sum() != (cur_input_ids == vision_tower.config.im_end_token).sum():
-                        raise ValueError("The number of im_start_token and im_end_token should be the same")
-                    image_start_tokens = torch.where(cur_input_ids == vision_tower.config.im_start_token)[0]
-                    if self.maskmodel is not None:
-                        mask_start_tokens = torch.where(cur_input_ids == vision_tower.config.mask_start_token)[0]
-                    else:
-                        # dummy 
-                        mask_start_tokens = image_start_tokens
-                    for image_start_token_pos, mask_start_token_pos in zip(image_start_tokens, mask_start_tokens):
-                        cur_image_features = image_features[cur_image_idx].to(device=cur_input_embeds.device)
-                        if self.maskmodel is not None:
-                            cur_mask_features = mask_features[cur_image_idx].to(device=cur_input_embeds.device)
-                            num_mask_patches = cur_mask_features.shape[0]
-                        num_patches = cur_image_features.shape[0]
-                       
-                        if cur_input_ids[image_start_token_pos + num_patches + 1] != vision_tower.config.im_end_token:
-                            raise ValueError("Seems that the image is cut.")
-                        if self.maskmodel is not None:
-                            if cur_input_ids[mask_start_token_pos + num_mask_patches + 1] != vision_tower.config.mask_end_token:
-                                raise ValueError("Seems that the mask image is cut.")
-                        #print("cur_input_embeds", cur_input_embeds.shape)
-                        cur_new_input_embeds = torch.cat((cur_input_embeds[:image_start_token_pos+1], cur_image_features, cur_input_embeds[image_start_token_pos + num_patches + 1:]), dim=0)
-                        #print("cur_new_input_embeds", cur_new_input_embeds.shape)
-                        #temp_length = len(cur_new_input_embeds)
-                        if self.maskmodel is not None:
-                            cur_new_input_embeds = torch.cat((cur_new_input_embeds[:mask_start_token_pos+1], cur_mask_features, cur_new_input_embeds[mask_start_token_pos + num_mask_patches + 1:]), dim=0)
-                        #print("cur_new_input_embeds after mask", cur_new_input_embeds.shape)
-                        cur_image_idx += 1
-                    new_input_embeds.append(cur_new_input_embeds)
-                else:
-                    print("not support not using im start end and mask satrt end yet")
-                    cur_image_features = image_features[cur_image_idx].to(device=cur_input_embeds.device)
-                    num_patches = cur_image_features.shape[0]
-                    if (cur_input_ids == vision_tower.config.im_patch_token).sum() != num_patches:
-                        raise ValueError("The number of im_patch_token should be the same as the number of patches")
-                    masked_indices = torch.where(cur_input_ids == vision_tower.config.im_patch_token)[0]
-                    mask_index_start = masked_indices[0]
-                    if (masked_indices != torch.arange(mask_index_start, mask_index_start+num_patches, device=masked_indices.device, dtype=masked_indices.dtype)).any():
-                        raise ValueError("The im_patch_token should be continuous")
-                    cur_new_input_embeds = torch.cat((cur_input_embeds[:mask_index_start], cur_image_features, cur_input_embeds[mask_index_start+num_patches:]), dim=0)
-                    new_input_embeds.append(cur_new_input_embeds)
-                    
-            inputs_embeds = torch.stack(new_input_embeds, dim=0)
+            #huge #hack 
+            inputs_embeds = torch.cat([image_features, inputs_embeds], dim=1)   
+                       #torch.stack(new_input_embeds, dim=0)
             #print("inputs_embeds", inputs_embeds.shape)
         # embed positions
         if attention_mask is None:

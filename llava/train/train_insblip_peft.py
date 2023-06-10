@@ -54,8 +54,41 @@ DEFAULT_IMAGE_TOKEN = "<image>"
 DEFAULT_IMAGE_PATCH_TOKEN = "<im_patch>"
 DEFAULT_IM_START_TOKEN = "<im_start>"
 DEFAULT_IM_END_TOKEN = "<im_end>"
+import numpy as np
+import re 
+from omegaconf import OmegaConf
 
+class BlipCaptionProcessor:
+    def __init__(self, prompt="", max_words=50):
+        self.prompt = prompt
+        self.max_words = max_words
 
+    def __call__(self, caption):
+        caption = self.prompt + self.pre_caption(caption)
+
+        return caption
+
+    def pre_caption(self, caption):
+        caption = re.sub(
+            r"([.!\"()*#:;~])",
+            " ",
+            caption.lower(),
+        )
+        caption = re.sub(
+            r"\s{2,}",
+            " ",
+            caption,
+        )
+        caption = caption.rstrip("\n")
+        caption = caption.strip(" ")
+
+        # truncate caption
+        caption_words = caption.split(" ")
+        if len(caption_words) > self.max_words:
+            caption = " ".join(caption_words[: self.max_words])
+
+        return caption
+    
 @dataclass
 class ModelArguments:
     model_name_or_path: Optional[str] = field(default="facebook/opt-125m")
@@ -290,55 +323,91 @@ class LazySupervisedDataset(Dataset):
 
         logging.warning("Formatting inputs...Skip in lazy mode")
         self.tokenizer = tokenizer
-        self.list_data_dict = list_data_dict
+        self.list_data_dict = list_data_dict['data']
         self.multimodal_cfg = multimodal_cfg
+
+        self.prompts =  ["{}","Question: {}", 
+            "{} A short answer to the question is",
+            "Q: {} A:",
+            "Question: {} Short answer:",
+            "Given the image, answer the following question with no more than three words. {}",
+            "Based on the image, respond to this question with a short answer: {}. Answer:",
+            "Use the provided image to answer the question: {} Provide your answer as short as possible:",
+            "What is the answer to the following question?{}",
+            "The question {} can be answered using the image. A short answer is"]
+
+        self.text_processor = BlipCaptionProcessor()
 
     def __len__(self):
         return len(self.list_data_dict)
 
     def __getitem__(self, i) -> Dict[str, torch.Tensor]:
-        sources = self.list_data_dict[i]
-        if isinstance(i, int):
-            sources = [sources]
-        assert len(sources) == 1, "Don't know why it is wrapped to a list"  # FIXME
-        if 'image' in sources[0]:
-            image_file = self.list_data_dict[i]['image']
-            image_folder = self.multimodal_cfg['image_folder']
-            processor = self.multimodal_cfg['image_processor']
-            image = Image.open(os.path.join(image_folder, image_file))
-            if self.multimodal_cfg['image_aspect_ratio'] == 'keep':
-                max_hw, min_hw = max(image.size), min(image.size)
-                aspect_ratio = max_hw / min_hw
-                max_len, min_len = 448, 224
-                shortest_edge = int(min(max_len / aspect_ratio, min_len))
-                image = processor.preprocess(image, return_tensors='pt', do_center_crop=False, size={"shortest_edge": shortest_edge})['pixel_values'][0]
-            else:
-                #hack for BLIP processor 
-                if isinstance(processor, Blip2Processor):
-                    image = processor(images=image, return_tensors='pt')['pixel_values'][0]
-                else:
-                    image = processor.preprocess(image, return_tensors='pt')['pixel_values'][0]
-            cur_token_len = 32 # (image.shape[1]//14) * (image.shape[2]//14)   # FIXME: 14 is hardcoded patch size
-            sources = preprocess_multimodal(
-                copy.deepcopy([e["conversations"] for e in sources]),
-                self.multimodal_cfg, cur_token_len)
-        else:
-            sources = copy.deepcopy([e["conversations"] for e in sources])
-        data_dict = preprocess(
-            sources,
-            self.tokenizer)
-        if isinstance(i, int):
-            data_dict = dict(input_ids=data_dict["input_ids"][0],
-                             labels=data_dict["labels"][0], 
-                             qformer_text_input=data_dict["qformer_text_input"][0])
+        ann = self.list_data_dict[i]
+        image_folder = self.multimodal_cfg['image_folder']
+        processor = self.multimodal_cfg['image_processor']
 
-        # image exist in the data
-        if 'image' in self.list_data_dict[i]:
-            data_dict['image'] = image
-        elif self.multimodal_cfg['is_multimodal']:
-            # image does not exist in the data, but the model is multimodal
-            crop_size = self.multimodal_cfg['image_processor'].crop_size
-            data_dict['image'] = torch.zeros(3, crop_size['height'], crop_size['width'])
+        image_path = os.path.join(image_folder, ann["image_id"] + '.jpg')
+        image = Image.open(image_path).convert("RGB")
+
+        if self.multimodal_cfg['image_aspect_ratio'] == 'keep':
+            max_hw, min_hw = max(image.size), min(image.size)
+            aspect_ratio = max_hw / min_hw
+            max_len, min_len = 448, 224
+            shortest_edge = int(min(max_len / aspect_ratio, min_len))
+            image = processor.preprocess(image, return_tensors='pt', do_center_crop=False, size={"shortest_edge": shortest_edge})['pixel_values'][0]
+        else:
+            #blip processor 
+            image = processor(images=image, return_tensors='pt')['pixel_values'][0]
+            
+        question = self.text_processor(ann["question"])
+
+        choice = np.random.choice(len(self.prompts))
+
+        text_input = self.prompts[choice].format(question)
+
+        answer = ann["answers"][0]
+        if len(ann["answers"]) > 1:
+            answer_weight = {}
+            for answer in ann["answers"]:
+                if answer in answer_weight.keys():
+                    answer_weight[answer] += 1 / len(ann["answers"])
+                else:
+                    answer_weight[answer] = 1 / len(ann["answers"])
+            
+            answer = max(answer_weight, key=answer_weight.get)
+
+        self.tokenizer.padding_side = "right"
+        self.tokenizer.truncation_side = 'left'
+        text_input_tokens = self.tokenizer(
+            text_input,
+            return_tensors="pt",
+            padding="longest",
+            truncation=True,
+            max_length=128,
+        )    #.to(image.device)
+
+        self.tokenizer.truncation_side = 'right'
+        text_output_tokens = self.tokenizer(
+            answer + self.tokenizer.eos_token,
+            return_tensors="pt",
+            padding="longest",
+            truncation=True,
+            max_length=256,
+        )  #.to(image.device)
+
+        # input_ids = labels = [
+        #         tokenized.input_ids[0] for tokenized in tokenized_list
+        #     ]
+        
+        input_part_targets_len = text_input_tokens.attention_mask.sum()
+
+        concat_input_out_ids = torch.cat([text_input_tokens.input_ids, text_output_tokens.input_ids] , dim=-1 )[0]
+        
+        targets = copy.deepcopy(concat_input_out_ids)
+        targets[:input_part_targets_len] = -100
+
+        data_dict = dict(input_ids=concat_input_out_ids, labels=targets, qformer_text_input=text_input)
+        data_dict['image'] = image
         return data_dict
 
 
@@ -366,12 +435,8 @@ class DataCollatorForSupervisedDataset(object):
             text_input=text_input,
         )
 
-        if 'image' in instances[0]:
-            images = [instance['image'] for instance in instances]
-            if all(x is not None and x.shape == images[0].shape for x in images):
-                batch['images'] = torch.stack(images)
-            else:
-                batch['images'] = images
+        images = [instance['image'] for instance in instances]
+        batch['images'] = torch.stack(images)
 
         return batch
 
@@ -429,18 +494,13 @@ def train():
         padding_side="right",
         use_fast=False,
     )
-    if tokenizer.pad_token is None:
-        smart_tokenizer_and_embedding_resize(
-            special_tokens_dict=dict(pad_token=DEFAULT_PAD_TOKEN),
-            tokenizer=tokenizer,
-            model=model,
-        )
-    #if "llama" in model_args.model_name_or_path:
-    tokenizer.add_special_tokens({
-        "eos_token": DEFAULT_EOS_TOKEN,
-        "bos_token": DEFAULT_BOS_TOKEN,
-        "unk_token": DEFAULT_UNK_TOKEN,
-    })
+    tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+    tokenizer.add_special_tokens({'bos_token': '</s>'})
+    tokenizer.add_special_tokens({'eos_token': '</s>'})
+    tokenizer.add_special_tokens({'unk_token': '</s>'})
+    
+    model.resize_token_embeddings(len(tokenizer))
+
     if model_args.vision_tower is not None:
         #model.config.mm_vision_tower = model_args.vision_tower
 
@@ -581,58 +641,21 @@ def train():
         if model_args.tune_mm_mlp_adapter:
             print("we are pretraining vision language projection layer")
             model.requires_grad_(False) 
-            
             for p in model.model.llama_proj.parameters():
                  p.requires_grad = True
-            # for p in model.model.ln_vision.parameters():
-            #     p.requires_grad = True
+
             if not model_args.freeze_qformer:
                 print("We are updating qformer weight")
                 for p in model.model.Qformer.parameters():
                     p.requires_grad = True
                 model.model.query_tokens.requires_grad = True
-        
-        model.config.mm_use_im_start_end = model_args.mm_use_im_start_end
-        data_args.mm_use_im_start_end = model_args.mm_use_im_start_end
-        tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
-        vision_config.use_im_start_end = model_args.mm_use_im_start_end
-        if model_args.mm_use_im_start_end:
-            print("ok, we definitly should use im start end tokens")
-            num_new_tokens = tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
-            model.resize_token_embeddings(len(tokenizer))
-            vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
 
-            if num_new_tokens > 0:
-                input_embeddings = model.get_input_embeddings().weight.data
-                output_embeddings = model.get_output_embeddings().weight.data
-
-                input_embeddings_avg = input_embeddings[:-num_new_tokens].mean(
-                    dim=0, keepdim=True)
-                output_embeddings_avg = output_embeddings[:-num_new_tokens].mean(
-                    dim=0, keepdim=True)
-
-                input_embeddings[-num_new_tokens:] = input_embeddings_avg
-                output_embeddings[-num_new_tokens:] = output_embeddings_avg
-
-            if model_args.tune_mm_mlp_adapter:
-                model.model.orig_embeds_params = [model.get_input_embeddings().weight.data.clone().to(device=training_args.device)]
-                for p in model.get_input_embeddings().parameters():
-                    p.requires_grad = True
-                for p in model.get_output_embeddings().parameters():
-                    p.requires_grad = False
-
-            # if model_args.pretrain_mm_mlp_adapter:
-            #     mm_projector_weights = torch.load(model_args.pretrain_mm_mlp_adapter, map_location='cpu')
-            #     embed_tokens_weight = mm_projector_weights['model.embed_tokens.weight']
-            #     assert num_new_tokens == 2
-            #     if input_embeddings.shape == embed_tokens_weight.shape:
-            #         input_embeddings[-num_new_tokens:] = embed_tokens_weight[-num_new_tokens:]
-            #     elif embed_tokens_weight.shape[0] == num_new_tokens:
-            #         input_embeddings[-num_new_tokens:] = embed_tokens_weight
-            #     else:
-            #         raise ValueError(f"Unexpected embed_tokens_weight shape. Pretrained: {embed_tokens_weight.shape}. Current: {input_embeddings.shape}. Numer of new tokens: {num_new_tokens}.")
-
-        vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
+            # if model_args.tune_mm_mlp_adapter:
+            #     model.model.orig_embeds_params = [model.get_input_embeddings().weight.data.clone().to(device=training_args.device)]
+            #     for p in model.get_input_embeddings().parameters():
+            #         p.requires_grad = True
+            #     for p in model.get_output_embeddings().parameters():
+            #         p.requires_grad = False
 
         model.model.visual_encoder.config = vision_config
 
@@ -722,7 +745,7 @@ def train():
     # for param in model.model.llama_proj.parameters():
     #     param.requires_grad =True   
         
-    # model.enable_input_require_grads()
+    model.enable_input_require_grads()
 
     config = LoraConfig(
         r= 8, #lora_r, #16
