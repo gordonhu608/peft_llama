@@ -19,7 +19,7 @@ import os
 from llava.conversation import conv_templates,mysimpleconv
 from llava.utils import disable_torch_init
 from transformers import CLIPVisionModel, CLIPImageProcessor, StoppingCriteria
-import llava.model.blip_llama_infer as blip_llama
+import llava.model.blip_llama as blip_llama
 from llava.model.blip2 import Blip2Base, disabled_train
 from llava.model.dist_utils import download_cached_file
 from llava.utils import KeywordsStoppingCriteria, load_image
@@ -45,21 +45,19 @@ def get_model(args):
     
     model = blip_llama.LlamaForCausalLM.from_pretrained(model_name, torch_dtype=torch.bfloat16).to(args.device)
 
-    mm_use_im_start_end = getattr(model.config, "mm_use_im_start_end", False)
-    print("mm_use_im", mm_use_im_start_end)
     # tokenizer.add_tokens([DEFAULT_IMAGE_PATCH_TOKEN], special_tokens=True)
     image_token_len = 32  
     
     # if mm_use_im_start_end:
     #     tokenizer.add_tokens([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN], special_tokens=True)
+    tokenizer.add_special_tokens({'pad_token': '[PAD]'})
+    tokenizer.add_special_tokens({'bos_token': '</s>'})
+    tokenizer.add_special_tokens({'eos_token': '</s>'})
+    tokenizer.add_special_tokens({'unk_token': '</s>'})
+    #tokenizer.add_special_tokens({'unk_token': '</s>'})
+    tokenizer.add_tokens(['<img_patch>'], special_tokens=True)
 
-    vision_config = model.model.visual_encoder.config
-    vision_config.im_patch_token = tokenizer.convert_tokens_to_ids([DEFAULT_IMAGE_PATCH_TOKEN])[0]
-    vision_config.use_im_start_end = mm_use_im_start_end
-    if mm_use_im_start_end:
-        vision_config.im_start_token, vision_config.im_end_token = tokenizer.convert_tokens_to_ids([DEFAULT_IM_START_TOKEN, DEFAULT_IM_END_TOKEN])
-    
-    model.model.visual_encoder.config = vision_config
+    model.resize_token_embeddings(len(tokenizer))
     
     model.to('cpu')  # lora weight is on cpu
     model = PeftModel.from_pretrained(
@@ -67,7 +65,7 @@ def get_model(args):
             lora_weight,
             torch_dtype=torch.bfloat16,
         )
-    model.to(args.device)
+    #model.to(args.device)
     model.eval()
     if torch.__version__ >= "2":
         model = torch.compile(model)
@@ -325,19 +323,9 @@ def evaluate_VQA(
         #hack change peft vl model generate
        
         qs = batch['question']
-        text_input = batch['question']
-        mm_use_im_start_end = True 
-        image_token_len = 32  
-        if mm_use_im_start_end:
-            qs = qs + '\n' + DEFAULT_IM_START_TOKEN + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len + DEFAULT_IM_END_TOKEN
-        else:
-            qs = qs + '\n' + DEFAULT_IMAGE_PATCH_TOKEN * image_token_len
+        text_input =32 * "<img_patch>" + batch['question'] 
 
-        #conv = conv_templates[args.conv_mode].copy()
-        conv = mysimpleconv.copy()
-        conv.append_message(conv.roles[0], qs)
-        prompt = conv.get_prompt()
-        inputs = tokenizer([prompt])
+        inputs = tokenizer([text_input])
 
         image = load_image(batch['image_path'])
         # img_list.append(batch['image_path'])
@@ -348,47 +336,33 @@ def evaluate_VQA(
         #image_processor = CLIPImageProcessor.from_pretrained("openai/clip-vit-large-patch14", torch_dtype=torch.bfloat16)
         image_tensor = image_processor(images=image, return_tensors='pt')['pixel_values'][0]
         image_tensor = image_tensor.unsqueeze(0).to(dtype=torch.bfloat16, device=args.device)
-        
+
         input_ids = torch.as_tensor(inputs.input_ids).to(args.device) # , dtype=torch.float16).cuda()  ## added dtype
 
-        keywords = ['###']
-        stopping_criteria = KeywordsStoppingCriteria(keywords, tokenizer, input_ids)
 
-        with torch.inference_mode():
+        with torch.no_grad():
+            print("input_ids", input_ids.shape, "image_tensor", image_tensor.shape)
             output_ids = model.generate(
                 input_ids=input_ids,
-                text_input=text_input, 
+                text_input=qs, 
                 images=image_tensor,
-                do_sample=True,
-                temperature=0.7,
-                max_new_tokens=1024,
-                stopping_criteria=[stopping_criteria])
+                do_sample=False,
+                temperature=1,
+                top_p = 0.9,
+                max_length=256, 
+                min_length=1,
+                repetition_penalty=1.5,
+                length_penalty=1.0,
+                num_return_sequences=1,
+                )
+            
+        output_ids[output_ids == 0] = 2 # convert output id 0 to 2 (eos_token_id)
+        output_text = tokenizer.batch_decode(output_ids, skip_special_tokens=True)
+        output_text = [text.strip() for text in output_text]
 
-        input_token_len = input_ids.shape[1]
-        n_diff_input_output = (input_ids != output_ids[:, :input_token_len]).sum().item()
-        if n_diff_input_output > 0:
-            print(f'[Warning] {n_diff_input_output} output_ids are not the same as the input_ids')
-        outputs = tokenizer.batch_decode(output_ids[:, input_token_len:], skip_special_tokens=True)[0]
-
-        while True:
-            cur_len = len(outputs)
-            outputs = outputs.strip()
-            for pattern in ['###', 'Assistant:', 'Response:']:
-                if outputs.startswith(pattern):
-                    outputs = outputs[len(pattern):].strip()
-            if len(outputs) == cur_len:
-                break
-
-        try:
-            index = outputs.index(conv.sep)
-        except ValueError:
-            outputs += conv.sep
-            index = outputs.index(conv.sep)
-
-        outputs = outputs[:index].strip()
-        print("\n outputs:", outputs, "\n answer", batch['gt_answers'])
+        print("\n outputs:", output_text, "\n answer", batch['gt_answers'])
         #output = #model.generate(image=batch['image_path'], question=batch['question'])
-        answer_dict={'question':batch['question'], 'answer':outputs, 
+        answer_dict={'question':batch['question'], 'answer':output_text, 
         'gt_answers':batch['gt_answers'], 'image_path':batch['image_path'],
         'model_name':model_name}
         predictions.append(answer_dict)

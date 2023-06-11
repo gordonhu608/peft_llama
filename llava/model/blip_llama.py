@@ -653,7 +653,6 @@ class LlamaModel(LlamaPreTrainedModel):
 
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
-
         # image_embeds = self.ln_vision(self.visual_encoder(image)).to(device)
         # image_atts = torch.ones(image_embeds.size()[:-1], dtype=torch.long)
         # query_tokens = self.query_tokens.expand(image_embeds.shape[0], -1, -1)
@@ -690,7 +689,14 @@ class LlamaModel(LlamaPreTrainedModel):
                         )
                         image_features.append(image_feature)
                 else:
-                    image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) 
+                    #hack  don't why it's 5, 3, 224, 224
+                    images = images[0].unsqueeze(0)
+                    try: 
+                        image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) 
+                    except Exception as e:
+                        print("Autocast for differnt precision")
+                        with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+                            image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) 
                 
                     #image_embeds = self.ln_vision(vision_tower(images)).to(inputs_embeds.device) #.unsqueeze(0)
                     # print("torch.isfinite(image_embed).all(): {}, min. {:.5f}, max. {:.5f}".format(torch.isfinite(image_embeds).all(), image_embeds.min(), image_embeds.max()))
@@ -704,6 +710,7 @@ class LlamaModel(LlamaPreTrainedModel):
                     #     return_dict=True,
                     # )
             if type(images) is list:
+                print('not supporting this')
                 image_features = [self.llama_proj(image_feature.last_hidden_state)[0] for image_feature in image_features]
             else:
                 #fix don't forget to change this back
@@ -722,8 +729,16 @@ class LlamaModel(LlamaPreTrainedModel):
                         return_tensors="pt",
                     ).to(inputs_embeds.device)
                     query_atts = torch.ones(query_tokens.size()[:-1], dtype=torch.long).to(inputs_embeds.device)
+
+                    # from pdb import set_trace
+                    # set_trace()
+
+
                     Qformer_atts = torch.cat([query_atts, text_Qformer.attention_mask],dim=1)
 
+                    # print(image_embeds.dtype)
+                    # print(query_tokens.dtype)
+                    # print(image_atts.dtype)
                     query_output = self.Qformer.bert(
                         text_Qformer.input_ids,
                         attention_mask=Qformer_atts,
@@ -766,7 +781,7 @@ class LlamaModel(LlamaPreTrainedModel):
         if attention_mask is None:
             attention_mask = torch.ones(
                 (batch_size, seq_length_with_past), dtype=torch.bool, device=inputs_embeds.device
-            )
+            )   
         attention_mask = self._prepare_decoder_attention_mask(
             attention_mask, (batch_size, seq_length), inputs_embeds, past_key_values_length
         )

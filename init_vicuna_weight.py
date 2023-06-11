@@ -6,11 +6,11 @@ if __name__ == "__main__":
     from llava.model.dist_utils import download_cached_file
 
 
-    state = torch.load('checkpoints/trained_mixed_insblip_epoch1/pytorch_model.bin')
+    state = torch.load('checkpoints/textocronly_insblip_epoch2_b32/pytorch_model.bin')
     new_state = {'.'.join(k.split('.')[2:]): v for k,v in state.items()}
     print(new_state.keys())
     
-    torch.save(new_state, 'checkpoints/trained_mixed_insblip_epoch1/pytorch_model.bin' )
+    torch.save(new_state, 'checkpoints/textocronly_insblip_epoch2_b32/pytorch_model.bin' )
     
     sys.exit(1)
 
