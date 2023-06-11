@@ -754,8 +754,13 @@ class LlamaModel(LlamaPreTrainedModel):
             # dummy_image_features = self.llama_proj(dummy_image_features) #[1,32, 4096]
             
             #huge #hack 
-            inputs_embeds = torch.cat([image_features, inputs_embeds], dim=1)   
-                       #torch.stack(new_input_embeds, dim=0)
+            new_input_embeds = []
+            for cur_input_embeds, image_feature in zip(inputs_embeds, image_features):
+                
+                cur_new_input_embeds = torch.cat([image_feature, cur_input_embeds[32:]], dim=0)
+                new_input_embeds.append(cur_new_input_embeds)
+
+            inputs_embeds = torch.stack(new_input_embeds, dim=0)
             #print("inputs_embeds", inputs_embeds.shape)
         # embed positions
         if attention_mask is None:

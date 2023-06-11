@@ -11,11 +11,11 @@ WORLD_SIZE=1 CUDA_VISIBLE_DEVICES=0 \
     --tune_mm_mlp_adapter True \
     --mm_use_im_start_end True \
     --bf16 True \
-    --output_dir ./checkpoints/textocronly_insblip_epoch1_b32\
-    --num_train_epochs 1 \
-    --per_device_train_batch_size 4 \
+    --output_dir ./checkpoints/textocronly_insblip_epoch2_b32\
+    --num_train_epochs 2 \
+    --per_device_train_batch_size 16 \
     --per_device_eval_batch_size 4 \
-    --gradient_accumulation_steps 8 \
+    --gradient_accumulation_steps 4 \
     --evaluation_strategy "no" \
     --save_strategy "steps" \
     --save_steps 5000 \

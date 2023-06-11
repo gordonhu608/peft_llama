@@ -379,7 +379,7 @@ class LazySupervisedDataset(Dataset):
         self.tokenizer.padding_side = "right"
         self.tokenizer.truncation_side = 'left'
         text_input_tokens = self.tokenizer(
-            text_input,
+            "<img_patch>" * 32 + text_input,
             return_tensors="pt",
             padding="longest",
             truncation=True,
@@ -398,6 +398,7 @@ class LazySupervisedDataset(Dataset):
         # input_ids = labels = [
         #         tokenized.input_ids[0] for tokenized in tokenized_list
         #     ]
+        
         
         input_part_targets_len = text_input_tokens.attention_mask.sum()
 
@@ -428,15 +429,28 @@ class DataCollatorForSupervisedDataset(object):
         labels = torch.nn.utils.rnn.pad_sequence(labels,
                                                  batch_first=True,
                                                  padding_value=IGNORE_INDEX)
+        
+        images = [instance['image'] for instance in instances]
+        batched_images= torch.stack(images)
+        #bs =  batched_images.shape[0]
+        #img_attentions = torch.ones((bs, 32), dtype=torch.long).to(input_ids.device)
+
+        # empty_targets = (
+        #     torch.ones(img_attentions.size(), dtype=torch.long).to(input_ids.device).fill_(-100)
+        # )
+
+        #labels = torch.cat([empty_targets, labels], dim=1)
+
+        attention_mask=input_ids.ne(self.tokenizer.pad_token_id)
+        #attention_mask = torch.cat([img_attentions, attention_mask], dim=1)
+
         batch = dict(
+            images=batched_images,
             input_ids=input_ids,
             labels=labels,
-            attention_mask=input_ids.ne(self.tokenizer.pad_token_id),
+            attention_mask=attention_mask,
             text_input=text_input,
         )
-
-        images = [instance['image'] for instance in instances]
-        batch['images'] = torch.stack(images)
 
         return batch
 
@@ -498,7 +512,9 @@ def train():
     tokenizer.add_special_tokens({'bos_token': '</s>'})
     tokenizer.add_special_tokens({'eos_token': '</s>'})
     tokenizer.add_special_tokens({'unk_token': '</s>'})
-    
+    #tokenizer.add_special_tokens({'unk_token': '</s>'})
+    tokenizer.add_tokens(['<img_patch>'], special_tokens=True)
+
     model.resize_token_embeddings(len(tokenizer))
 
     if model_args.vision_tower is not None:
